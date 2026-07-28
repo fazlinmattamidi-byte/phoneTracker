@@ -35,6 +35,9 @@ export type PlateQualityClass = (typeof PLATE_QUALITY_CLASSES)[number];
 
 export type Distribution<T extends string> = Record<T, number>;
 
+export const ENVIRONMENT_CLASSIFIER_ACTION_CONFIDENCE = 0.70;
+export const ENVIRONMENT_HEURISTIC_ACTION_CONFIDENCE = 0.58;
+
 export interface EnvironmentProfile {
   label: EnvironmentClass;
   confidence: number;
@@ -141,6 +144,15 @@ export function createDefaultEnvironmentProfile(): EnvironmentProfile {
     source: 'HEURISTIC',
     sampledAt: Date.now(),
   };
+}
+
+export function isEnvironmentProfileActionable(environment: EnvironmentProfile): boolean {
+  const minimumConfidence =
+    environment.source === 'YOLOV8_CLASSIFIER'
+      ? ENVIRONMENT_CLASSIFIER_ACTION_CONFIDENCE
+      : ENVIRONMENT_HEURISTIC_ACTION_CONFIDENCE;
+
+  return environment.confidence >= minimumConfidence;
 }
 
 export function createAdaptiveScannerConfig(

@@ -7,7 +7,13 @@ import { parseAndValidateVehiclesCsv } from '../lib/utils/csv';
 import { evaluateConsensus } from '../lib/anpr/consensus';
 import { ActiveTrack } from '../lib/anpr/tracker';
 import { VALIDATION_MANIFEST } from '../lib/anpr/validationManifest';
-import { createAdaptiveScannerConfig, ENVIRONMENT_CLASSES, EnvironmentProfile } from '../lib/anpr/adaptiveConfig';
+import {
+  createAdaptiveScannerConfig,
+  ENVIRONMENT_CLASSES,
+  EnvironmentProfile,
+  isEnvironmentProfileActionable,
+  PLATE_QUALITY_CLASSES,
+} from '../lib/anpr/adaptiveConfig';
 
 describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
 
@@ -177,6 +183,42 @@ TEST1234,Farid,Proton,S70,Silver,Maybank,25000.00,MBB999,ACTIVE,New test case`;
       'RAIN',
       'TRAFFIC',
       'TUNNEL',
+    ]);
+  });
+
+  it('gates environment adaptation by classifier confidence', () => {
+    const classifierProfile = (confidence: number): EnvironmentProfile => ({
+      label: 'RAIN',
+      confidence,
+      source: 'YOLOV8_CLASSIFIER',
+      sampledAt: Date.now(),
+    });
+
+    const heuristicProfile = (confidence: number): EnvironmentProfile => ({
+      label: 'NIGHT',
+      confidence,
+      source: 'HEURISTIC',
+      sampledAt: Date.now(),
+    });
+
+    expect(isEnvironmentProfileActionable(classifierProfile(0.69))).toBe(false);
+    expect(isEnvironmentProfileActionable(classifierProfile(0.70))).toBe(true);
+    expect(isEnvironmentProfileActionable(heuristicProfile(0.57))).toBe(false);
+    expect(isEnvironmentProfileActionable(heuristicProfile(0.58))).toBe(true);
+  });
+
+  it('uses the plate-quality classifier class set', () => {
+    expect(PLATE_QUALITY_CLASSES).toEqual([
+      'READABLE',
+      'GOOD',
+      'SLIGHT_BLUR',
+      'MOTION_BLUR',
+      'OUT_OF_FOCUS',
+      'TOO_SMALL',
+      'LOW_CONTRAST',
+      'DIRTY',
+      'OCCLUDED',
+      'REFLECTION',
     ]);
   });
 });

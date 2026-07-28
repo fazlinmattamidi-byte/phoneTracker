@@ -34,7 +34,16 @@ If this file is not present, the scanner uses a deterministic frame-stat heurist
 ## 4. Plate Quality Assessment Model
 - **Framework:** YOLOv8 Classification
 - **Path:** `/models/plate-quality-classifier.onnx`
+- **Metadata:** `/models/plate-quality-classifier.metadata.json`
 - **Classes:** `READABLE`, `GOOD`, `SLIGHT_BLUR`, `MOTION_BLUR`, `OUT_OF_FOCUS`, `TOO_SMALL`, `LOW_CONTRAST`, `DIRTY`, `OCCLUDED`, `REFLECTION`
 
 This model does not read text. It only decides whether a plate crop should be admitted to OCR. If absent, the scanner uses the existing crop-quality heuristics.
-- `/models/ppocr-rec.onnx`
+
+Train/export with reviewed Dataset Mode exports:
+
+```bash
+npm run prepare:quality -- --exports /path/to/track_dataset_export_*.json --clear
+npm run train:quality -- --data datasets/plate-quality-cls
+```
+
+See `docs/plate-quality-model.md`.

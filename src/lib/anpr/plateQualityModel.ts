@@ -33,6 +33,7 @@ export interface PlateQualityModelOptions {
 }
 
 const QUALITY_MODEL_PATH = '/models/plate-quality-classifier.onnx';
+const QUALITY_METADATA_PATH = '/models/plate-quality-classifier.metadata.json';
 const MODEL_FETCH_TIMEOUT_MS = 12000;
 const MODEL_INIT_TIMEOUT_MS = 12000;
 const MODEL_INFERENCE_TIMEOUT_MS = 2000;
@@ -45,6 +46,7 @@ let qualityError: string | null = null;
 let reusableCanvas: HTMLCanvasElement | null = null;
 let reusableCtx: CanvasRenderingContext2D | null = null;
 let reusableTensorData: Float32Array | null = null;
+let qualityModelClasses: PlateQualityClass[] = [...PLATE_QUALITY_CLASSES];
 
 export function getPlateQualityModelStatus(): PlateQualityModelStatus {
   return qualityStatus;
@@ -96,6 +98,7 @@ export async function initPlateQualityModel(): Promise<boolean> {
             MODEL_INIT_TIMEOUT_MS,
             'Plate quality classifier session creation'
           );
+          qualityModelClasses = await loadPlateQualityModelClasses();
           qualityStatus = 'READY';
           return true;
         } catch (err: any) {
@@ -201,8 +204,8 @@ async function runPlateQualityClassifier(
       'Plate quality classifier inference'
     );
     const outputName = qualitySession.outputNames?.[0] || Object.keys(outputs)[0];
-    const probs = toProbabilities(outputs[outputName]?.data || []);
-    const top = getTopClass(probs, PLATE_QUALITY_CLASSES);
+    const probs = toProbabilities(outputs[outputName]?.data || [], qualityModelClasses.length);
+    const top = getTopClass(probs, qualityModelClasses);
 
     return buildAssessment(top.label, top.confidence, 'YOLOV8_CLASSIFIER', report, options);
   } finally {
@@ -274,8 +277,30 @@ function prepareClassifierInput(canvas: HTMLCanvasElement): Float32Array {
   return reusableTensorData;
 }
 
-function toProbabilities(values: ArrayLike<number>): number[] {
-  const raw = Array.from(values).slice(0, PLATE_QUALITY_CLASSES.length);
+async function loadPlateQualityModelClasses(): Promise<PlateQualityClass[]> {
+  try {
+    const response = await fetchWithTimeout(
+      QUALITY_METADATA_PATH,
+      2500,
+      'Plate quality classifier metadata fetch',
+      { cache: 'no-store' }
+    );
+    if (!response.ok) return [...PLATE_QUALITY_CLASSES];
+    const metadata = await response.json();
+    const classes = Array.isArray(metadata?.classes) ? metadata.classes : [];
+    const allowed = new Set<string>(PLATE_QUALITY_CLASSES);
+    const validClasses = classes.filter((item: unknown): item is PlateQualityClass => (
+      typeof item === 'string' && allowed.has(item)
+    ));
+
+    return validClasses.length > 0 ? validClasses : [...PLATE_QUALITY_CLASSES];
+  } catch {
+    return [...PLATE_QUALITY_CLASSES];
+  }
+}
+
+function toProbabilities(values: ArrayLike<number>, classCount: number): number[] {
+  const raw = Array.from(values).slice(0, classCount);
   if (raw.length === 0) return [];
   const alreadyProbabilities =
     raw.every((value) => value >= 0 && value <= 1) &&

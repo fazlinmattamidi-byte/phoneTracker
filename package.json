@@ -10,7 +10,9 @@
     "lint": "eslint",
     "test": "vitest run",
     "prepare:environment": "python3 scripts/prepare_bdd100k_environment_cls.py",
-    "train:environment": "python3 train_environment_model.py"
+    "train:environment": "python3 train_environment_model.py",
+    "prepare:quality": "python3 scripts/prepare_plate_quality_cls.py",
+    "train:quality": "python3 train_plate_quality_model.py"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.5.5",

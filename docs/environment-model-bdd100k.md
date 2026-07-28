@@ -107,6 +107,8 @@ public/models/environment-classifier.metadata.json
 
 The scanner automatically loads the ONNX model. If the file is missing, it continues with the frame-stat heuristic fallback and shows that status in Developer Mode.
 
+The runtime does not blindly apply every classifier result. YOLOv8 environment predictions must reach the configured classifier action confidence before they change detector cadence, OCR thresholds, crop buffers, or preprocessing variants. Low-confidence predictions are still counted in runtime metrics, but active scanner settings remain on the last trusted environment profile.
+
 ## Notes
 
 BDD100K is broad enough for the first environment model, but some classes are derived rather than directly labeled. After field testing, improve `HEAVY_RAIN`, `GLARE`, `BACKLIGHT`, and `TRAFFIC` with PlateQ Dataset Mode exports from real Malaysian repossession-vehicle footage.

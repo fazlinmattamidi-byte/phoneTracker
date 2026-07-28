@@ -69,6 +69,7 @@ import {
   EnvironmentProfile,
   getDistributionPercentages,
   incrementDistribution,
+  isEnvironmentProfileActionable,
   PLATE_QUALITY_CLASSES,
   PlateQualityClass,
 } from '@/lib/anpr/adaptiveConfig';
@@ -2128,15 +2129,10 @@ export default function ScannerPage() {
       void (async () => {
         try {
           const profile = await classifyEnvironment(sampleCanvas, environmentStatsRef.current);
+          const shouldAdapt = isEnvironmentProfileActionable(profile);
           environmentStatsRef.current = profile.stats;
-          environmentProfileRef.current = profile;
-          const nextConfig = createAdaptiveScannerConfig(profile);
-          adaptiveConfigRef.current = nextConfig;
 
           const metrics = runtimeMetricsRef.current;
-          metrics.currentEnvironment = profile.label;
-          metrics.currentEnvironmentConfidence = profile.confidence;
-          metrics.currentEnvironmentSource = profile.source;
           metrics.environmentDistribution = incrementDistribution(metrics.environmentDistribution, profile.label);
           metrics.cameraHealth = createCameraHealthSnapshot(
             profile.stats,
@@ -2144,17 +2140,32 @@ export default function ScannerPage() {
             metrics.droppedFrameCount
           );
 
-          setEnvironmentProfile(profile);
-          setAdaptiveConfigSnapshot(nextConfig);
+          if (shouldAdapt) {
+            environmentProfileRef.current = profile;
+            const nextConfig = createAdaptiveScannerConfig(profile);
+            adaptiveConfigRef.current = nextConfig;
 
-          Object.values(slotRuntimesRef.current).forEach((runtime) => {
-            runtime.bestFrameSelector.configure({
-              maxBufferSize: nextConfig.buffer.maxSize,
-              maxEntryAgeMs: nextConfig.buffer.maxEntryAgeMs,
+            metrics.currentEnvironment = profile.label;
+            metrics.currentEnvironmentConfidence = profile.confidence;
+            metrics.currentEnvironmentSource = profile.source;
+
+            setEnvironmentProfile(profile);
+            setAdaptiveConfigSnapshot(nextConfig);
+
+            Object.values(slotRuntimesRef.current).forEach((runtime) => {
+              runtime.bestFrameSelector.configure({
+                maxBufferSize: nextConfig.buffer.maxSize,
+                maxEntryAgeMs: nextConfig.buffer.maxEntryAgeMs,
+              });
             });
-          });
 
-          void applyActiveCameraConstraints();
+            void applyActiveCameraConstraints();
+          } else {
+            const activeProfile = environmentProfileRef.current;
+            metrics.currentEnvironment = activeProfile.label;
+            metrics.currentEnvironmentConfidence = activeProfile.confidence;
+            metrics.currentEnvironmentSource = activeProfile.source;
+          }
         } catch (err) {
           console.warn('[Scanner] Environment classifier failed:', err);
         } finally {
