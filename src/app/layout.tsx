@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from 'next';
-import Script from 'next/script';
 import './globals.css';
 import { Providers } from './providers';
 import { TopHeader } from '@/components/layout/TopHeader';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { BottomNav } from '@/components/layout/BottomNav';
+import { ServiceWorkerCleanup } from '@/components/layout/ServiceWorkerCleanup';
 
 export const metadata: Metadata = {
   title: 'Track - Malaysian Vehicle Plate Detection & Matching System',
@@ -34,27 +34,10 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <head>
         <link rel="icon" href="/favicon.ico" />
-        <Script
-          id="clear-stale-service-worker"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                  for (let r of registrations) { r.unregister(); }
-                });
-              }
-              if (window.caches) {
-                caches.keys().then(function(keys) {
-                  for (let k of keys) { caches.delete(k); }
-                });
-              }
-            `,
-          }}
-        />
       </head>
       <body className="min-h-screen bg-slate-950 text-slate-100 antialiased flex flex-col selection:bg-cyan-500 selection:text-slate-950">
         <Providers>
+          <ServiceWorkerCleanup />
           <TopHeader />
           <div className="app-shell flex flex-1 w-full min-w-0">
             <Sidebar />

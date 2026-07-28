@@ -1356,6 +1356,7 @@ export default function ScannerPage() {
   const { t, language } = useLanguage();
   const { vehicles, addHistoryLog, updateVehicle, settings } = useStorage();
   const { role } = useAuth();
+  const canUseDiagnostics = role === 'ADMIN' || role === 'SUPER_ADMIN';
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const canvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
@@ -1431,6 +1432,8 @@ export default function ScannerPage() {
   const [systemHealthSnapshot, setSystemHealthSnapshot] = useState<SystemHealthSnapshot>(() =>
     createSystemHealthSnapshot(createMetricsSnapshot(createInitialRuntimeMetrics(), []), 0, 0)
   );
+  const effectiveDeveloperMode = canUseDiagnostics && developerMode;
+  const effectiveDatasetMode = canUseDiagnostics && datasetMode;
 
   const getSlotRuntime = useCallback((slotId: string): SlotScannerRuntime => {
     if (!slotRuntimesRef.current[slotId]) {
@@ -1656,12 +1659,12 @@ export default function ScannerPage() {
   }, [isScanning]);
 
   useEffect(() => {
-    developerModeRef.current = developerMode;
-  }, [developerMode]);
+    developerModeRef.current = effectiveDeveloperMode;
+  }, [effectiveDeveloperMode]);
 
   useEffect(() => {
-    datasetModeRef.current = datasetMode;
-  }, [datasetMode]);
+    datasetModeRef.current = effectiveDatasetMode;
+  }, [effectiveDatasetMode]);
 
   useEffect(() => {
     supportsMultiCameraScanRef.current = supportsMultiCameraScan;
@@ -1718,10 +1721,10 @@ export default function ScannerPage() {
         0.35,
         0.7
       ),
-      debugMode: developerMode,
+      debugMode: effectiveDeveloperMode,
       showCenterGuide: false,
     };
-  }, [developerMode, settings, soundEnabled]);
+  }, [effectiveDeveloperMode, settings, soundEnabled]);
 
   useEffect(() => {
     const initTimer = window.setTimeout(() => {
@@ -3245,6 +3248,7 @@ export default function ScannerPage() {
   };
 
   const handleExportScannerMetrics = () => {
+    if (!canUseDiagnostics) return;
     const snapshot = createMetricsSnapshot(runtimeMetricsRef.current, tracksList);
     const health = createSystemHealthSnapshot(snapshot, detFps, camFps);
     const payload = {
@@ -3358,6 +3362,7 @@ export default function ScannerPage() {
   };
 
   const handleExportDataset = () => {
+    if (!canUseDiagnostics) return;
     const samples = datasetSamplesRef.current;
     const yoloDataset = samples.map((sample) => ({
       imagePath: `${sample.folderPath}/original.jpg`,
@@ -3441,11 +3446,64 @@ export default function ScannerPage() {
       ? 'NONE'
       : null;
 
-  const showDeveloperOverlay = developerMode;
+  const showDeveloperOverlay = effectiveDeveloperMode;
   const showUnsupportedBrowserWarning = typeof navigator !== 'undefined' && !isSupportedDesktopScannerBrowser();
   const activeCameraMetadata = cameraMetadataBySlot[activeCameraSlotId];
   const environmentDistributionPercent = serializeDistributionPercentages(runtimeMetricsSnapshot.environmentDistribution);
   const qualityDistributionPercent = serializeDistributionPercentages(runtimeMetricsSnapshot.qualityDistribution);
+  const activeCameraLabel = activeCameraMetadata?.label || getCameraSlotLabel(cameraSlots[0], 0);
+  const simpleScannerStatus = cameraError
+    ? language === 'BM'
+      ? 'Kamera perlu disemak'
+      : 'Camera needs attention'
+    : isScanning && runtimeReady
+    ? language === 'BM'
+      ? 'Sedang mengimbas'
+      : 'Scanning'
+    : isScanning
+    ? language === 'BM'
+      ? 'Memulakan pengimbas'
+      : 'Starting scanner'
+    : previewSlotIds.length > 0
+    ? language === 'BM'
+      ? 'Pratonton sedia'
+      : 'Preview ready'
+    : language === 'BM'
+    ? 'Pilih kamera'
+    : 'Choose camera';
+  const simpleScannerHint = cameraError
+    ? cameraError
+    : isScanning
+    ? language === 'BM'
+      ? 'Biarkan kamera aktif. Sistem akan terus mencari nombor plat.'
+      : 'Keep the camera active. The scanner will continue looking for plates.'
+    : previewSlotIds.length > 0
+    ? language === 'BM'
+      ? 'Tekan Start Scanning untuk mula.'
+      : 'Press Start Scanning to begin.'
+    : language === 'BM'
+    ? 'Tekan Preview dan benarkan akses kamera.'
+    : 'Press Preview and allow camera access.';
+  const simpleLastResult = latestDetection
+    ? latestResultTone === 'EXACT'
+      ? language === 'BM'
+        ? 'Padanan kes'
+        : 'Match found'
+      : latestResultTone === 'POSSIBLE'
+      ? language === 'BM'
+        ? 'Perlu semakan'
+        : 'Needs review'
+      : language === 'BM'
+      ? 'Tiada padanan'
+      : 'No match'
+    : language === 'BM'
+    ? 'Belum ada imbasan'
+    : 'No scans yet';
+  const simpleLastResultDetail = latestDetection
+    ? `${latestDetection.plate} · ${latestDetection.confidence}%`
+    : language === 'BM'
+    ? 'Keputusan akan dipaparkan selepas plat dikesan.'
+    : 'Results will appear after a plate is detected.';
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto px-1 sm:px-0">
@@ -3478,31 +3536,35 @@ export default function ScannerPage() {
               <RefreshCw className="w-4 h-4" />
               <span>Refresh</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setDeveloperMode((value) => !value)}
-              className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
-                developerMode
-                  ? 'border-cyan-700 bg-cyan-950 text-cyan-200'
-                  : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-cyan-700 hover:text-cyan-300'
-              }`}
-            >
-              <Brain className="w-4 h-4" />
-              <span>Dev</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDatasetMode((value) => !value)}
-              className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
-                datasetMode
-                  ? 'border-emerald-700 bg-emerald-950 text-emerald-200'
-                  : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-emerald-700 hover:text-emerald-300'
-              }`}
-            >
-              <Download className="w-4 h-4" />
-              <span>Dataset</span>
-            </button>
-            {datasetSamplesRef.current.length > 0 && (
+            {canUseDiagnostics && (
+              <button
+                type="button"
+                onClick={() => setDeveloperMode((value) => !value)}
+                className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+                  developerMode
+                    ? 'border-cyan-700 bg-cyan-950 text-cyan-200'
+                    : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-cyan-700 hover:text-cyan-300'
+                }`}
+              >
+                <Brain className="w-4 h-4" />
+                <span>Diagnostics</span>
+              </button>
+            )}
+            {canUseDiagnostics && (
+              <button
+                type="button"
+                onClick={() => setDatasetMode((value) => !value)}
+                className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+                  datasetMode
+                    ? 'border-emerald-700 bg-emerald-950 text-emerald-200'
+                    : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-emerald-700 hover:text-emerald-300'
+                }`}
+              >
+                <Download className="w-4 h-4" />
+                <span>Dataset</span>
+              </button>
+            )}
+            {canUseDiagnostics && datasetSamplesRef.current.length > 0 && (
               <button
                 type="button"
                 onClick={handleExportDataset}
@@ -3590,40 +3652,73 @@ export default function ScannerPage() {
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Camera className="h-4 w-4 text-cyan-300" />
-            <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">Scanner Status</span>
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">
+              {language === 'BM' ? 'Status Pengimbas' : 'Scanner Status'}
+            </span>
           </div>
-          <span className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black uppercase text-slate-300">
-            {runtimeMetricsSnapshot.performanceMode.replace('_', ' ')}
-          </span>
+          {!showDeveloperOverlay && (
+            <span className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black uppercase text-slate-300">
+              {isScanning ? (language === 'BM' ? 'Aktif' : 'Active') : language === 'BM' ? 'Sedia' : 'Ready'}
+            </span>
+          )}
+          {showDeveloperOverlay && (
+            <span className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black uppercase text-slate-300">
+              {runtimeMetricsSnapshot.performanceMode.replace('_', ' ')}
+            </span>
+          )}
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          {[
-            ['Camera', activeCameraMetadata?.label || getCameraSlotLabel(cameraSlots[0], 0)],
-            [
-              'Resolution',
-              activeCameraMetadata?.width
-                ? `${activeCameraMetadata.width}x${activeCameraMetadata.height}`
-                : `${adaptiveConfigSnapshot.camera.idealWidth}x${adaptiveConfigSnapshot.camera.idealHeight}`,
-            ],
-            ['FPS', camFps ? camFps.toFixed(0) : activeCameraMetadata?.fps?.toFixed(0) || '0'],
-            ['Environment', `${environmentProfile.label} ${Math.round(environmentProfile.confidence * 100)}%`],
-            ['Backend', `${detectorProvider}/${ocrProvider}`],
-            ['System Health', `${systemHealthSnapshot.overallScore}%`],
-            ['Detector FPS', detFps.toFixed(0)],
-            ['OCR Queue', runtimeMetricsSnapshot.lastOcrQueueDepth.toFixed(0)],
-            ['Quality', `${runtimeMetricsSnapshot.currentQuality} ${Math.round(runtimeMetricsSnapshot.currentQualityConfidence * 100)}%`],
-            ['Quality Engine', getPlateQualityEngineLabel().replace('QUALITY ENGINE: ', '')],
-            ['Current Environment', runtimeMetricsSnapshot.currentEnvironment],
-            ['Current Camera', activeCameraMetadata?.kind?.replaceAll('_', ' ') || 'UNKNOWN'],
-            ['Developer Mode', developerMode ? 'ON' : 'OFF'],
-            ['Dataset Mode', datasetMode ? `${datasetSamplesRef.current.length} samples` : 'OFF'],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2">
-              <div className="truncate text-[9px] font-bold uppercase text-slate-500">{label}</div>
-              <div className="mt-0.5 truncate font-mono text-[11px] font-black text-slate-100">{value}</div>
+
+        {!showDeveloperOverlay ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              [language === 'BM' ? 'Kamera' : 'Camera', activeCameraLabel],
+              [language === 'BM' ? 'Keadaan' : 'Status', simpleScannerStatus],
+              [language === 'BM' ? 'Keputusan Terkini' : 'Latest Result', simpleLastResult],
+              [language === 'BM' ? 'Jumlah Sesi' : 'Session Scans', liveDetections.length.toString()],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2.5">
+                <div className="truncate text-[10px] font-bold uppercase text-slate-500">{label}</div>
+                <div className="mt-1 truncate text-sm font-black text-slate-100">{value}</div>
+              </div>
+            ))}
+            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2.5 sm:col-span-2 lg:col-span-4">
+              <div className="text-[10px] font-bold uppercase text-slate-500">
+                {language === 'BM' ? 'Nota' : 'Message'}
+              </div>
+              <div className="mt-1 text-xs font-semibold text-slate-300">{simpleScannerHint}</div>
+              <div className="mt-1 text-[11px] text-slate-500">{simpleLastResultDetail}</div>
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {[
+              ['Camera', activeCameraLabel],
+              [
+                'Resolution',
+                activeCameraMetadata?.width
+                  ? `${activeCameraMetadata.width}x${activeCameraMetadata.height}`
+                  : `${adaptiveConfigSnapshot.camera.idealWidth}x${adaptiveConfigSnapshot.camera.idealHeight}`,
+              ],
+              ['FPS', camFps ? camFps.toFixed(0) : activeCameraMetadata?.fps?.toFixed(0) || '0'],
+              ['Environment', `${environmentProfile.label} ${Math.round(environmentProfile.confidence * 100)}%`],
+              ['Backend', `${detectorProvider}/${ocrProvider}`],
+              ['System Health', `${systemHealthSnapshot.overallScore}%`],
+              ['Detector FPS', detFps.toFixed(0)],
+              ['OCR Queue', runtimeMetricsSnapshot.lastOcrQueueDepth.toFixed(0)],
+              ['Quality', `${runtimeMetricsSnapshot.currentQuality} ${Math.round(runtimeMetricsSnapshot.currentQualityConfidence * 100)}%`],
+              ['Quality Engine', getPlateQualityEngineLabel().replace('QUALITY ENGINE: ', '')],
+              ['Current Environment', runtimeMetricsSnapshot.currentEnvironment],
+              ['Current Camera', activeCameraMetadata?.kind?.replaceAll('_', ' ') || 'UNKNOWN'],
+              ['Developer Mode', developerMode ? 'ON' : 'OFF'],
+              ['Dataset Mode', effectiveDatasetMode ? `${datasetSamplesRef.current.length} samples` : 'OFF'],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2">
+                <div className="truncate text-[9px] font-bold uppercase text-slate-500">{label}</div>
+                <div className="mt-0.5 truncate font-mono text-[11px] font-black text-slate-100">{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {latestDetection && latestResultTone && (

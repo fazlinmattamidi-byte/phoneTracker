@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Language } from '@/types';
 import { dictionary } from '@/lib/dictionary';
 
@@ -19,7 +19,15 @@ function readStoredLanguage(): Language {
 }
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [language, setLanguageState] = useState<Language>(() => readStoredLanguage());
+  const [language, setLanguageState] = useState<Language>('BM');
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setLanguageState(readStoredLanguage());
+    }, 0);
+
+    return () => window.clearTimeout(id);
+  }, []);
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);

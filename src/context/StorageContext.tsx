@@ -133,22 +133,25 @@ function parseVehicleStatus(value: string | undefined): VehicleStatus {
 }
 
 export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [vehicles, setVehicles] = useState<Vehicle[]>(() =>
-    readJsonStorage('track_vehicles', initialVehicles)
-  );
-  const [users, setUsers] = useState<UserAccount[]>(() =>
-    readJsonStorage('track_users', initialUsers, mergeStoredUsers)
-  );
-  const [cameras, setCameras] = useState<CameraDevice[]>(() =>
-    readJsonStorage('track_cameras', initialCameras)
-  );
-  const [history, setHistory] = useState<HistoryLog[]>(() =>
-    readJsonStorage('track_history', initialHistory, mergeStoredHistory)
-  );
-  const [settings, setSettings] = useState<SystemSettings>(() =>
-    readJsonStorage('track_settings', defaultSettings, sanitizeSystemSettings)
-  );
-  const [theme, setThemeState] = useState<ThemeMode>(() => readThemeStorage());
+  const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
+  const [users, setUsers] = useState<UserAccount[]>(initialUsers);
+  const [cameras, setCameras] = useState<CameraDevice[]>(initialCameras);
+  const [history, setHistory] = useState<HistoryLog[]>(initialHistory);
+  const [settings, setSettings] = useState<SystemSettings>(defaultSettings);
+  const [theme, setThemeState] = useState<ThemeMode>('dark');
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setVehicles(readJsonStorage('track_vehicles', initialVehicles));
+      setUsers(readJsonStorage('track_users', initialUsers, mergeStoredUsers));
+      setCameras(readJsonStorage('track_cameras', initialCameras));
+      setHistory(readJsonStorage('track_history', initialHistory, mergeStoredHistory));
+      setSettings(readJsonStorage('track_settings', defaultSettings, sanitizeSystemSettings));
+      setThemeState(readThemeStorage());
+    }, 0);
+
+    return () => window.clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     applyTheme(theme);

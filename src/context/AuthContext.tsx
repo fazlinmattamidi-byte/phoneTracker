@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Role, UserAccount } from '@/types';
 import { initialUsers } from '@/lib/mockData';
 
@@ -52,8 +52,16 @@ function getInitialAuthState(): AuthState {
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [authState, setAuthState] = useState<AuthState>(() => getInitialAuthState());
+  const [authState, setAuthState] = useState<AuthState>({ currentUser: initialUsers[0], role: 'SUPER_ADMIN' });
   const { currentUser, role } = authState;
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setAuthState(getInitialAuthState());
+    }, 0);
+
+    return () => window.clearTimeout(id);
+  }, []);
 
   const switchRole = (newRole: Role) => {
     localStorage.setItem('track_user_role', newRole);

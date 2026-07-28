@@ -30,6 +30,48 @@ export const ModelStatusBanner: React.FC<ModelStatusBannerProps> = ({
     return null;
   }
 
+  if (!debugMode) {
+    const message = isUnavailable
+      ? 'Scanner could not start. You can try again or use manual search.'
+      : isDegraded
+      ? 'Scanner is running, but this device may be slow.'
+      : 'Scanner is starting. This may take a moment.';
+    const Icon = isUnavailable ? AlertOctagon : isDegraded ? AlertTriangle : RefreshCw;
+
+    return (
+      <div className="flex flex-col gap-2 rounded-2xl border border-slate-800 bg-slate-950/95 p-3.5 text-xs shadow-xl">
+        <div className="flex items-center gap-2">
+          <Icon
+            className={`h-4 w-4 shrink-0 ${
+              isUnavailable ? 'text-rose-400' : isDegraded ? 'text-amber-400' : 'animate-spin text-cyan-300'
+            }`}
+          />
+          <span className="font-bold text-slate-200">{message}</span>
+        </div>
+        {(isUnavailable || isDegraded) && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="rounded-xl bg-cyan-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-cyan-500"
+              >
+                Try Again
+              </button>
+            )}
+            {onManualSearch && (
+              <button
+                onClick={onManualSearch}
+                className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-200 transition-colors hover:bg-slate-700"
+              >
+                Manual Search
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-2.5 p-3.5 bg-slate-950/95 border border-slate-800 rounded-2xl text-xs backdrop-blur-md shadow-2xl">
       <div className="flex items-center justify-between gap-2">
