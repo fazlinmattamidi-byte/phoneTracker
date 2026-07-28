@@ -24,7 +24,7 @@ This plan is for proving the browser ANPR pipeline with real vehicles before a V
 | Moving camera | [ ] | Handheld and vehicle-mounted |
 | Parked vehicle | [ ] | Near and far plates |
 | Moving vehicle | [ ] | Slow and moderate speed |
-| Camera and vehicle both moving | [ ] | Mobile ANPR target case |
+| Camera and vehicle both moving | [ ] | External webcam mounted in repossession vehicle |
 | Rain | [ ] | Wet plates and reflections |
 | Night | [ ] | Low-light and headlight glare |
 | Backlight | [ ] | Sun behind vehicle |
@@ -34,9 +34,13 @@ This plan is for proving the browser ANPR pipeline with real vehicles before a V
 | Reflective plate | [ ] | Glare handling |
 | Two adjacent vehicles | [ ] | Track separation |
 | Heavy traffic | [ ] | OCR queue pressure |
+| Fog or dirty lens | [ ] | Environment classifier and operator health warning |
+| Tunnel | [ ] | Low light to daylight transition |
+| Parking lot | [ ] | Slow scan, angled plates, low camera angle |
 | 30-minute run | [ ] | Memory, temperature, latency drift |
 | 1-hour run | [ ] | Stability and reconnect behavior |
 | 2-hour run | [ ] | Extended thermal throttling |
+| 8-hour run | [ ] | Continuous operation, cleanup, recovery, and memory growth |
 
 ## Recovery Tests
 
@@ -49,6 +53,8 @@ This plan is for proving the browser ANPR pipeline with real vehicles before a V
 | Thermal throttling | Device tier/adaptive pacing prevents queue runaway | [ ] |
 | WebGPU/WASM reset | Runtime banner reports degraded/unavailable state | [ ] |
 | Low-memory pressure | Metrics export shows memory growth and dropped frames | [ ] |
+| Environment model unavailable | Scanner falls back to frame-stat heuristic and keeps scanning | [ ] |
+| Plate quality model unavailable | Scanner falls back to crop-quality heuristic and keeps OCR gating | [ ] |
 
 ## Field Accuracy Report Template
 
@@ -60,6 +66,17 @@ This plan is for proving the browser ANPR pipeline with real vehicles before a V
 | Highway | 0 |  |  |  |  |  |  |  |  |
 | City | 0 |  |  |  |  |  |  |  |  |
 
+## Adaptive Intelligence Report Template
+
+| Scenario | Environment Class Accuracy | Quality Gate Precision | Quality Gate Recall | OCR Attempts Saved | OCR Accuracy Delta | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Day |  |  |  |  |  |  |
+| Night |  |  |  |  |  |  |
+| Rain |  |  |  |  |  |  |
+| Glare |  |  |  |  |  |  |
+| Highway |  |  |  |  |  |  |
+| Traffic |  |  |  |  |  |  |
+
 ## V1 Release Gate
 
 | Gate | Target | Status |
@@ -69,8 +86,8 @@ This plan is for proving the browser ANPR pipeline with real vehicles before a V
 | Full-plate recognition rate | Meets field target agreed from validation data | [ ] |
 | P95 response time | Within detector and OCR targets above | [ ] |
 | Memory growth | No uncontrolled growth over 1-2 hours | [ ] |
-| Long-duration stability | Stable operation for at least 1-2 hours | [ ] |
-| Device coverage | Representative Android and iPhone devices pass | [ ] |
+| Long-duration stability | Stable operation for at least 8 hours | [ ] |
+| Device coverage | Chrome/Edge on Windows/macOS laptops with built-in and USB webcams pass | [ ] |
 
 ## Release-Readiness Issues
 

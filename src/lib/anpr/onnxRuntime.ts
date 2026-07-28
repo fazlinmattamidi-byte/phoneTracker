@@ -53,17 +53,11 @@ export function canUseWebGpuExecutionProvider(): boolean {
   if (typeof navigator === 'undefined' || !(navigator as any).gpu) return false;
 
   const userAgent = navigator.userAgent || '';
+  const isChromeOrEdge = /Chrome|Chromium|Edg/i.test(userAgent) && !/OPR|Firefox/i.test(userAgent);
   const platform = navigator.platform || '';
-  const maxTouchPoints = (navigator as any).maxTouchPoints || 0;
-  const isIOS =
-    /iPad|iPhone|iPod/i.test(userAgent) ||
-    (platform === 'MacIntel' && maxTouchPoints > 1);
-  const isSafari =
-    /Safari/i.test(userAgent) &&
-    !/Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS|Android/i.test(userAgent);
-  const isAndroid = /Android/i.test(userAgent);
+  const isDesktop = /Mac|Win|Linux x86_64|Linux armv8l/i.test(platform);
 
-  return !isAndroid && !isIOS && !isSafari;
+  return isChromeOrEdge && isDesktop;
 }
 
 function loadScript(src: string): Promise<void> {
@@ -91,7 +85,7 @@ function loadScript(src: string): Promise<void> {
 
 /**
  * Load ONNX Runtime from the installed npm package instead of a CDN script.
- * This keeps local scanning functional on restricted networks and mobile devices.
+ * This keeps local scanning functional on restricted networks and desktop laptop deployments.
  */
 export async function getOrt(): Promise<any> {
   if (typeof window === 'undefined') return null;

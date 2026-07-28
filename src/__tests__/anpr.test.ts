@@ -7,6 +7,7 @@ import { parseAndValidateVehiclesCsv } from '../lib/utils/csv';
 import { evaluateConsensus } from '../lib/anpr/consensus';
 import { ActiveTrack } from '../lib/anpr/tracker';
 import { VALIDATION_MANIFEST } from '../lib/anpr/validationManifest';
+import { createAdaptiveScannerConfig, ENVIRONMENT_CLASSES, EnvironmentProfile } from '../lib/anpr/adaptiveConfig';
 
 describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
 
@@ -136,5 +137,46 @@ TEST1234,Farid,Proton,S70,Silver,Maybank,25000.00,MBB999,ACTIVE,New test case`;
 
     const overallAccuracy = (correctMatches / totalCases) * 100;
     expect(overallAccuracy).toBeGreaterThanOrEqual(90);
+  });
+
+  it('adapts scanner configuration for night, rain, and highway environments', () => {
+    const profile = (label: EnvironmentProfile['label']): EnvironmentProfile => ({
+      label,
+      confidence: 0.95,
+      source: 'HEURISTIC',
+      sampledAt: Date.now(),
+    });
+
+    const night = createAdaptiveScannerConfig(profile('NIGHT'));
+    expect(night.processing.preprocessingVariants).toContain('CLAHE');
+    expect(night.ocr.consensusVotes).toBeGreaterThanOrEqual(4);
+    expect(night.buffer.maxSize).toBeGreaterThan(6);
+
+    const rain = createAdaptiveScannerConfig(profile('RAIN'));
+    expect(rain.ocr.firstReadMinQuality).toBeGreaterThan(night.ocr.firstReadMinQuality);
+    expect(rain.track.lifetimeMultiplier).toBeGreaterThan(1);
+
+    const highway = createAdaptiveScannerConfig(profile('HIGHWAY'));
+    expect(highway.detector.targetIntervalMs).toBeLessThan(night.detector.targetIntervalMs);
+    expect(highway.ocr.maxCandidateCrops).toBeLessThan(night.ocr.maxCandidateCrops);
+    expect(highway.track.prioritizeHighestConfidence).toBe(true);
+  });
+
+  it('uses the BDD100K environment classifier class set', () => {
+    expect(ENVIRONMENT_CLASSES).toEqual([
+      'BACKLIGHT',
+      'DAY',
+      'FOG',
+      'GLARE',
+      'GOOD_CONDITION',
+      'HEAVY_RAIN',
+      'HIGHWAY',
+      'LOW_LIGHT',
+      'NIGHT',
+      'PARKING',
+      'RAIN',
+      'TRAFFIC',
+      'TUNNEL',
+    ]);
   });
 });

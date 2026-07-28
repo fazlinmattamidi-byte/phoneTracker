@@ -21,6 +21,18 @@ export class BestFrameSelector {
   private maxEntryAgeMs: number = 5000;
   private maxTrackBuffers: number = 16;
 
+  public configure(options: { maxBufferSize?: number; maxEntryAgeMs?: number; maxTrackBuffers?: number }): void {
+    if (typeof options.maxBufferSize === 'number') {
+      this.maxBufferSize = Math.max(1, Math.min(16, Math.round(options.maxBufferSize)));
+    }
+    if (typeof options.maxEntryAgeMs === 'number') {
+      this.maxEntryAgeMs = Math.max(1000, Math.min(15000, Math.round(options.maxEntryAgeMs)));
+    }
+    if (typeof options.maxTrackBuffers === 'number') {
+      this.maxTrackBuffers = Math.max(1, Math.min(32, Math.round(options.maxTrackBuffers)));
+    }
+  }
+
   private releaseEntry(entry: FrameCropEntry): void {
     entry.canvas.width = 0;
     entry.canvas.height = 0;
@@ -160,7 +172,7 @@ export class BestFrameSelector {
   }
 
   /**
-   * Remove old frame candidates so long-running scans stay stable on mobile browsers.
+   * Remove old frame candidates so long-running desktop scans stay memory-stable.
    */
   public pruneStale(
     maxAgeMs: number = this.maxEntryAgeMs,

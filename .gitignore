@@ -36,6 +36,7 @@ next-env.d.ts
 /.data/
 
 # ML Models
+datasets/
 _rf_tmp/
 runs/
 *.pt

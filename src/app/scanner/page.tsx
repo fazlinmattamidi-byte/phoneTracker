@@ -12,12 +12,15 @@ import {
   AlertTriangle,
   ArrowLeft,
   BookmarkCheck,
+  Brain,
+  Camera,
   CheckCircle2,
   Download,
   MapPin,
   Pause,
   Play,
   Plus,
+  RefreshCw,
   ShieldAlert,
   Video,
   Volume2,
@@ -56,6 +59,41 @@ import { evaluateDatabaseMatch } from '@/lib/anpr/matchingEngine';
 import { INITIAL_SETTINGS } from '@/lib/db/settingsDefaults';
 import { ScannerSettings, VehicleCase } from '@/lib/db/types';
 import { ModelStatusBanner } from '@/components/scanner/ModelStatusBanner';
+import {
+  AdaptiveScannerConfig,
+  createAdaptiveScannerConfig,
+  createDefaultEnvironmentProfile,
+  createEmptyDistribution,
+  ENVIRONMENT_CLASSES,
+  EnvironmentClass,
+  EnvironmentProfile,
+  getDistributionPercentages,
+  incrementDistribution,
+  PLATE_QUALITY_CLASSES,
+  PlateQualityClass,
+} from '@/lib/anpr/adaptiveConfig';
+import {
+  classifyEnvironment,
+  FrameImageStats,
+  getEnvironmentModelStatus,
+} from '@/lib/anpr/environmentIntelligence';
+import {
+  classifyPlateQuality,
+  getPlateQualityModelStatus,
+  PlateQualityAssessment,
+} from '@/lib/anpr/plateQualityModel';
+import {
+  CameraHealthSnapshot,
+  CameraRuntimeMetadata,
+  DesktopCameraDevice,
+  createCameraHealthSnapshot,
+  enumerateDesktopCameras,
+  getCameraRuntimeMetadata,
+  getRememberedCameraId,
+  openDesktopCameraStream,
+  rememberSelectedCamera,
+  selectPreferredCamera,
+} from '@/lib/anpr/cameraManager';
 
 type AlertMatch = {
   vehicle: Vehicle;
@@ -103,7 +141,7 @@ type DeviceTier = 'A' | 'B' | 'C' | 'D';
 
 type MotionBucket = 'NORMAL' | 'UNSTABLE' | 'COLLECT_ONLY' | 'PAUSED';
 
-type PerformanceMode = 'STANDARD' | 'ANDROID_OPTIMIZED' | 'THERMAL_SAVER' | 'SURVIVAL';
+type PerformanceMode = 'DESKTOP_STANDARD' | 'ADAPTIVE' | 'RECOVERY' | 'SURVIVAL';
 
 type ScannerRuntimeMetrics = {
   sessionStartedAt: number;
@@ -138,6 +176,27 @@ type ScannerRuntimeMetrics = {
   cameraProfile: string;
   processingProfile: string;
   ocrProfile: string;
+  currentEnvironment: EnvironmentClass;
+  currentEnvironmentConfidence: number;
+  currentEnvironmentSource: EnvironmentProfile['source'];
+  currentQuality: PlateQualityClass;
+  currentQualityConfidence: number;
+  currentQualitySource: PlateQualityAssessment['source'];
+  environmentDistribution: Record<EnvironmentClass, number>;
+  qualityDistribution: Record<PlateQualityClass, number>;
+  environmentStats: Record<
+    EnvironmentClass,
+    {
+      frames: number;
+      detectorLatencyTotalMs: number;
+      detectorLatencySamples: number;
+      ocrLatencyTotalMs: number;
+      ocrLatencySamples: number;
+      cropQualityTotal: number;
+      cropQualitySamples: number;
+    }
+  >;
+  cameraHealth: CameraHealthSnapshot;
   memoryBaselineMb?: number;
   memoryCurrentMb?: number;
 };
@@ -177,6 +236,27 @@ type CompletedTrackEvent = {
   processingTimeMs: number;
   reasonForCompletion: string;
   deviceTier: DeviceTier;
+  environment: EnvironmentClass;
+  environmentConfidence: number;
+  qualityClass: PlateQualityClass;
+  qualityConfidence: number;
+};
+
+type DatasetSample = {
+  id: string;
+  timestamp: string;
+  folderPath: string;
+  originalImageDataUrl: string;
+  plateCropDataUrl: string;
+  environmentClass: EnvironmentClass;
+  environmentConfidence: number;
+  qualityClass: PlateQualityClass;
+  qualityConfidence: number;
+  ocrResult: string;
+  ocrConfidence: number;
+  detectorConfidence: number;
+  trackConfidence: number;
+  camera: CameraRuntimeMetadata | null;
 };
 
 type HealthStatus = 'OK' | 'WARN' | 'FAIL' | 'UNKNOWN';
@@ -254,30 +334,19 @@ function downgradeDeviceTier(tier: DeviceTier, levels: number): DeviceTier {
 
 function getPerformanceMode(baseTier: DeviceTier, effectiveTier: DeviceTier, adaptationLevel: number): PerformanceMode {
   if (adaptationLevel >= 3 || effectiveTier === 'D') return 'SURVIVAL';
-  if (adaptationLevel > 0 || effectiveTier !== baseTier) return 'THERMAL_SAVER';
-  if (isAndroidDevice()) return 'ANDROID_OPTIMIZED';
-  return 'STANDARD';
+  if (adaptationLevel > 0 || effectiveTier !== baseTier) return 'ADAPTIVE';
+  return 'DESKTOP_STANDARD';
 }
 
 function getExecutionModeLabel(): string {
-  if (isAndroidDevice()) return 'WASM';
-  return 'AUTO';
+  return 'WebGPU -> WASM';
 }
 
 function getCameraProfileValues(adaptationLevel = 0): { width: number; height: number; fps: number } {
-  const android = isAndroidDevice();
-  const constrainedAndroid = isConstrainedAndroidDevice();
-
-  if (android || adaptationLevel > 0) {
-    const level = Math.max(adaptationLevel, constrainedAndroid ? 1 : 0);
-    return {
-      width: level >= 3 ? 480 : level >= 2 ? 560 : constrainedAndroid ? 640 : 720,
-      height: level >= 3 ? 360 : level >= 2 ? 420 : constrainedAndroid ? 480 : 540,
-      fps: level >= 3 ? 10 : level >= 2 ? 12 : constrainedAndroid ? 12 : 15,
-    };
-  }
-
-  return { width: 1280, height: 720, fps: 30 };
+  if (adaptationLevel >= 3) return { width: 1280, height: 720, fps: 24 };
+  if (adaptationLevel >= 2) return { width: 1280, height: 720, fps: 30 };
+  if (adaptationLevel >= 1) return { width: 1600, height: 900, fps: 30 };
+  return { width: 1920, height: 1080, fps: 30 };
 }
 
 function getCameraProfileLabel(tier: DeviceTier, adaptationLevel = 0): string {
@@ -321,8 +390,37 @@ function applyRuntimePerformanceProfile(
   metrics.ocrProfile = getOcrProfileLabel(effectiveTier, boundedLevel);
 }
 
+function createEnvironmentStats(): ScannerRuntimeMetrics['environmentStats'] {
+  return ENVIRONMENT_CLASSES.reduce((acc, label) => {
+    acc[label] = {
+      frames: 0,
+      detectorLatencyTotalMs: 0,
+      detectorLatencySamples: 0,
+      ocrLatencyTotalMs: 0,
+      ocrLatencySamples: 0,
+      cropQualityTotal: 0,
+      cropQualitySamples: 0,
+    };
+    return acc;
+  }, {} as ScannerRuntimeMetrics['environmentStats']);
+}
+
+function createInitialCameraHealth(): CameraHealthSnapshot {
+  return {
+    status: 'UNKNOWN',
+    score: 0,
+    brightness: 0,
+    contrast: 0,
+    blurScore: 0,
+    droppedFrames: 0,
+    fps: 0,
+    detail: 'waiting for frame sample',
+  };
+}
+
 function createInitialRuntimeMetrics(deviceTier: DeviceTier = 'B'): ScannerRuntimeMetrics {
   const memoryBaselineMb = getUsedHeapMb();
+  const initialEnvironment = createDefaultEnvironmentProfile();
   const metrics: ScannerRuntimeMetrics = {
     sessionStartedAt: Date.now(),
     detectorLatencyTotalMs: 0,
@@ -356,11 +454,21 @@ function createInitialRuntimeMetrics(deviceTier: DeviceTier = 'B'): ScannerRunti
     deviceTier,
     adaptationLevel: 0,
     performanceMode: getPerformanceMode(deviceTier, deviceTier, 0),
-    performanceModeReason: isAndroidDevice() ? 'Android optimized baseline' : 'Baseline profile',
+    performanceModeReason: 'Desktop baseline profile',
     executionMode: getExecutionModeLabel(),
     cameraProfile: getCameraProfileLabel(deviceTier, 0),
     processingProfile: getProcessingProfileLabel(deviceTier, 0),
     ocrProfile: getOcrProfileLabel(deviceTier, 0),
+    currentEnvironment: initialEnvironment.label,
+    currentEnvironmentConfidence: initialEnvironment.confidence,
+    currentEnvironmentSource: initialEnvironment.source,
+    currentQuality: 'READABLE',
+    currentQualityConfidence: 0,
+    currentQualitySource: 'HEURISTIC',
+    environmentDistribution: createEmptyDistribution(ENVIRONMENT_CLASSES),
+    qualityDistribution: createEmptyDistribution(PLATE_QUALITY_CLASSES),
+    environmentStats: createEnvironmentStats(),
+    cameraHealth: createInitialCameraHealth(),
     memoryBaselineMb,
     memoryCurrentMb: memoryBaselineMb,
   };
@@ -463,7 +571,9 @@ function createSystemHealthSnapshot(
   const trackingScore = Math.round(trackingLossScore * 0.55 + confidenceScore * 0.45);
 
   const queueScore = scoreCeilingTarget(snapshot.lastOcrQueueDepth, targets.maxOcrQueueDepth);
-  const cameraScore = cameraFps > 0 ? Math.min(100, Math.round((cameraFps / 24) * 100)) : 0;
+  const cameraScore = snapshot.cameraHealth.status === 'UNKNOWN'
+    ? cameraFps > 0 ? Math.min(100, Math.round((cameraFps / 24) * 100)) : 0
+    : snapshot.cameraHealth.score;
   const falseAlertScore = snapshot.falseAlertCount <= targets.falseExactMatches ? 100 : 0;
   const memoryScore =
     typeof snapshot.memoryGrowthPercent === 'number'
@@ -483,7 +593,12 @@ function createSystemHealthSnapshot(
         : 'heap unavailable',
       typeof snapshot.memoryGrowthPercent === 'number' ? undefined : 'UNKNOWN'
     ),
-    createHealthComponent('Camera', cameraScore, `${cameraFps.toFixed(0)} FPS`),
+    createHealthComponent(
+      'Camera',
+      cameraScore,
+      snapshot.cameraHealth.status === 'UNKNOWN' ? `${cameraFps.toFixed(0)} FPS` : snapshot.cameraHealth.detail,
+      snapshot.cameraHealth.status === 'UNKNOWN' ? undefined : snapshot.cameraHealth.status
+    ),
     createHealthComponent('Alerts', falseAlertScore, `${snapshot.falseAlertCount} false exact`, falseAlertScore === 100 ? 'OK' : 'FAIL'),
   ];
 
@@ -571,23 +686,13 @@ function classifyDeviceTier(
   benchmark: AdmissionBenchmarkResult | null,
   runtimeState: ANPRRuntimeState
 ): DeviceTier {
-  const android = isAndroidDevice();
-  const constrainedAndroid = isConstrainedAndroidDevice();
-
   if (benchmark) {
-    if (android) {
-      if (!constrainedAndroid && benchmark.estimatedFps >= 8) return 'B';
-      if (benchmark.estimatedFps >= 3.2) return 'C';
-      return 'D';
-    }
-
     if (benchmark.estimatedFps >= 9) return 'A';
     if (benchmark.estimatedFps >= 6.5) return 'B';
     if (benchmark.estimatedFps >= 4) return 'C';
     return 'D';
   }
 
-  if (android) return constrainedAndroid ? 'D' : 'C';
   if (runtimeState === 'READY_WEBGPU') return 'A';
   if (runtimeState === 'READY_WASM') return 'B';
   if (runtimeState === 'DEGRADED_PERFORMANCE') return 'C';
@@ -635,85 +740,48 @@ function getTierOcrConcurrencyLimit(tier: DeviceTier): number {
   }
 }
 
-function isAndroidDevice(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /Android/i.test(navigator.userAgent || '');
-}
-
-function isConstrainedAndroidDevice(): boolean {
-  if (!isAndroidDevice() || typeof navigator === 'undefined') return false;
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const memoryGb = nav.deviceMemory ?? 4;
-  const cpuCores = navigator.hardwareConcurrency || 4;
-  const userAgent = navigator.userAgent || '';
-
-  return memoryGb <= 4 || cpuCores <= 4 || /wv|Version\/4\.0/i.test(userAgent);
-}
-
-function isInAppBrowser(): boolean {
+function isSupportedDesktopScannerBrowser(): boolean {
   if (typeof navigator === 'undefined') return false;
   const userAgent = navigator.userAgent || '';
+  const isChromeOrEdge = /Chrome|Chromium|Edg/i.test(userAgent) && !/OPR|Firefox|Safari\/.*Version/i.test(userAgent);
+  const platform = navigator.platform || '';
+  const isDesktopPlatform = /Mac|Win|Linux x86_64|Linux armv8l/i.test(platform);
 
-  return /FBAN|FBAV|Instagram|Line|MicroMessenger|WhatsApp|Twitter|TikTok|Snapchat|; wv\)|\bwv\b/i.test(userAgent);
+  return isChromeOrEdge && isDesktopPlatform;
 }
 
 function getCameraPerformanceConstraints(adaptationLevel = 0): MediaTrackConstraints {
   const { width, height, fps } = getCameraProfileValues(adaptationLevel);
-  const androidOrAdapted = isAndroidDevice() || adaptationLevel > 0;
-
-  if (androidOrAdapted) {
-    return {
-      width: { ideal: width, max: Math.min(960, Math.round(width * 1.2)) },
-      height: { ideal: height, max: Math.min(720, Math.round(height * 1.2)) },
-      frameRate: { ideal: fps, max: Math.min(20, fps + 3) },
-    };
-  }
 
   return {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    frameRate: { ideal: 30 },
+    width: { ideal: width },
+    height: { ideal: height },
+    frameRate: { ideal: fps, max: 30 },
   };
 }
 
-function getCameraVideoConstraints(slot: CameraSlot, adaptationLevel = 0): MediaTrackConstraints {
-  const baseConstraints = getCameraPerformanceConstraints(adaptationLevel);
-
-  if (slot.deviceId) {
-    return {
-      ...baseConstraints,
-      deviceId: { exact: slot.deviceId },
-    };
-  }
-
-  return {
-    ...baseConstraints,
-    facingMode: { ideal: 'environment' },
-  };
-}
-
-function getProcessingMaxLongEdge(tier: DeviceTier, adaptationLevel = 0): number {
+function getProcessingMaxLongEdge(tier: DeviceTier, adaptationLevel = 0, adaptiveMaxLongEdge?: number): number {
+  if (adaptiveMaxLongEdge) return adaptiveMaxLongEdge;
   if (adaptationLevel >= 3) return 360;
   if (adaptationLevel >= 2) return 420;
   if (adaptationLevel >= 1) return 560;
-  if (isAndroidDevice()) {
-    if (tier === 'D') return 480;
-    if (tier === 'C') return 640;
-    return 720;
-  }
 
-  return 1280;
+  if (tier === 'A') return 1600;
+  if (tier === 'B') return 1280;
+  if (tier === 'C') return 960;
+  return 720;
 }
 
 function getProcessingDimensions(
   videoWidth: number,
   videoHeight: number,
   tier: DeviceTier,
-  adaptationLevel = 0
+  adaptationLevel = 0,
+  adaptiveMaxLongEdge?: number
 ): { width: number; height: number } {
   if (videoWidth <= 0 || videoHeight <= 0) return { width: 0, height: 0 };
 
-  const maxLongEdge = getProcessingMaxLongEdge(tier, adaptationLevel);
+  const maxLongEdge = getProcessingMaxLongEdge(tier, adaptationLevel, adaptiveMaxLongEdge);
   const longEdge = Math.max(videoWidth, videoHeight);
   const scale = Math.min(1, maxLongEdge / longEdge);
 
@@ -756,6 +824,44 @@ function downloadJson(filename: string, payload: unknown): void {
   URL.revokeObjectURL(url);
 }
 
+function addEnvironmentDetectorSample(
+  metrics: ScannerRuntimeMetrics,
+  environment: EnvironmentClass,
+  latencyMs: number
+): void {
+  const stats = metrics.environmentStats[environment];
+  if (!stats) return;
+  stats.frames++;
+  stats.detectorLatencyTotalMs += latencyMs;
+  stats.detectorLatencySamples++;
+}
+
+function addEnvironmentOcrSample(
+  metrics: ScannerRuntimeMetrics,
+  environment: EnvironmentClass,
+  latencyMs: number,
+  cropQuality: number
+): void {
+  const stats = metrics.environmentStats[environment];
+  if (!stats) return;
+  stats.ocrLatencyTotalMs += latencyMs;
+  stats.ocrLatencySamples++;
+  stats.cropQualityTotal += cropQuality;
+  stats.cropQualitySamples++;
+}
+
+function serializeDistributionPercentages<T extends string>(distribution: Record<T, number>): Record<T, number> {
+  return getDistributionPercentages(distribution);
+}
+
+function canvasToJpegDataUrl(canvas: HTMLCanvasElement, quality = 0.82): string {
+  try {
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return '';
+  }
+}
+
 const SCAN_LOCATIONS: ScanLocation[] = [
   { name: 'Sungai Besi Toll Plaza', gps: '3.0602, 101.7047' },
   { name: 'Jalan Tun Razak, Kuala Lumpur', gps: '3.1618, 101.7165' },
@@ -796,6 +902,8 @@ const PERFORMANCE_ADAPTATION_CHECK_MS = 5000;
 const PERFORMANCE_ADAPTATION_COOLDOWN_MS = 12000;
 const PERFORMANCE_RECOVERY_COOLDOWN_MS = 45000;
 const CAMERA_CONSTRAINT_APPLY_COOLDOWN_MS = 10000;
+const ENVIRONMENT_SAMPLE_INTERVAL_MS = 1200;
+const DATASET_SAMPLE_LIMIT = 250;
 
 type MotionOcrMode = MotionBucket;
 type OcrQueuePressure = 'EMPTY' | 'MODERATE' | 'LARGE' | 'CRITICAL';
@@ -1121,7 +1229,7 @@ function getCameraPreflightError(): string | null {
   }
 
   if (!navigator.mediaDevices?.getUserMedia) {
-    return 'This browser does not expose camera access. Try a current mobile browser and allow camera permission.';
+    return 'This browser does not expose camera access. Open the scanner in the latest Chrome or Edge on Windows/macOS and allow camera permission.';
   }
 
   return null;
@@ -1129,12 +1237,7 @@ function getCameraPreflightError(): string | null {
 
 function canRunMultiCameraOnCurrentDevice(): boolean {
   if (typeof window === 'undefined') return false;
-
-  const userAgent = navigator.userAgent || '';
-  const phoneLikeUserAgent = /Mobi|Android|iPhone|iPod|Windows Phone/i.test(userAgent);
-  const narrowViewport = window.matchMedia('(max-width: 767px)').matches;
-
-  return !phoneLikeUserAgent && !narrowViewport;
+  return isSupportedDesktopScannerBrowser();
 }
 
 function mapVehicleToCase(vehicle: Vehicle): VehicleCase {
@@ -1172,10 +1275,13 @@ export default function ScannerPage() {
   const activeStreamsRef = useRef<Record<string, MediaStream>>({});
   const activeCameraSlotIdRef = useRef('camera-slot-1');
   const cameraSlotsRef = useRef<CameraSlot[]>([{ id: 'camera-slot-1', deviceId: '' }]);
-  const availableCamerasRef = useRef<MediaDeviceInfo[]>([]);
+  const availableCamerasRef = useRef<DesktopCameraDevice[]>([]);
+  const cameraMetadataBySlotRef = useRef<Record<string, CameraRuntimeMetadata>>({});
   const supportsMultiCameraScanRef = useRef(false);
   const isCameraReadyRef = useRef(false);
   const isScanningRef = useRef(false);
+  const developerModeRef = useRef(false);
+  const datasetModeRef = useRef(false);
   const runtimeStateRef = useRef<ANPRRuntimeState>('UNINITIALIZED');
   const vehiclesRef = useRef(vehicles);
   const addHistoryLogRef = useRef(addHistoryLog);
@@ -1186,21 +1292,35 @@ export default function ScannerPage() {
   const lastMetricsFlushTs = useRef(Date.now());
   const runtimeMetricsRef = useRef<ScannerRuntimeMetrics>(createInitialRuntimeMetrics());
   const completedTrackEventsRef = useRef<CompletedTrackEvent[]>([]);
+  const datasetSamplesRef = useRef<DatasetSample[]>([]);
   const lostTrackIdsRef = useRef<Set<string>>(new Set());
+  const adaptiveConfigRef = useRef<AdaptiveScannerConfig>(
+    createAdaptiveScannerConfig(createDefaultEnvironmentProfile())
+  );
+  const environmentProfileRef = useRef<EnvironmentProfile>(createDefaultEnvironmentProfile());
+  const environmentStatsRef = useRef<FrameImageStats | undefined>(undefined);
+  const environmentInferenceRunningRef = useRef(false);
   const lastPerformanceAdaptationAtRef = useRef(0);
   const lastCameraConstraintApplyAtRef = useRef(0);
   const stopCameraRef = useRef<(options?: { preserveScanningState?: boolean }) => void>(() => undefined);
   const startVisibleCamerasRef = useRef<(options?: { resumeScanning?: boolean }) => Promise<boolean>>(async () => false);
 
-  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [availableCameras, setAvailableCameras] = useState<DesktopCameraDevice[]>([]);
   const [cameraSlots, setCameraSlots] = useState<CameraSlot[]>([{ id: 'camera-slot-1', deviceId: '' }]);
   const [activeCameraSlotId, setActiveCameraSlotId] = useState('camera-slot-1');
   const [supportsMultiCameraScan, setSupportsMultiCameraScan] = useState(false);
   const [previewSlotIds, setPreviewSlotIds] = useState<string[]>([]);
+  const [cameraMetadataBySlot, setCameraMetadataBySlot] = useState<Record<string, CameraRuntimeMetadata>>({});
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [developerMode, setDeveloperMode] = useState(false);
+  const [datasetMode, setDatasetMode] = useState(false);
+  const [environmentProfile, setEnvironmentProfile] = useState<EnvironmentProfile>(() => createDefaultEnvironmentProfile());
+  const [adaptiveConfigSnapshot, setAdaptiveConfigSnapshot] = useState<AdaptiveScannerConfig>(() =>
+    createAdaptiveScannerConfig(createDefaultEnvironmentProfile())
+  );
   const [, setCurrentPlate] = useState('READY');
   const [, setLastDetectedSlotId] = useState('');
   const [activeAlertMatch, setActiveAlertMatch] = useState<AlertMatch | null>(null);
@@ -1256,7 +1376,13 @@ export default function ScannerPage() {
     lastCameraConstraintApplyAtRef.current = now;
 
     const metrics = runtimeMetricsRef.current;
-    const constraints = getCameraPerformanceConstraints(metrics.adaptationLevel);
+    const adaptiveCamera = adaptiveConfigRef.current.camera;
+    const constraints: MediaTrackConstraints = {
+      ...getCameraPerformanceConstraints(metrics.adaptationLevel),
+      width: { ideal: adaptiveCamera.idealWidth },
+      height: { ideal: adaptiveCamera.idealHeight },
+      frameRate: { ideal: adaptiveCamera.idealFps, max: 30 },
+    };
     const tracks = Object.values(activeStreamsRef.current).flatMap((stream) => stream.getVideoTracks());
 
     await Promise.all(
@@ -1265,7 +1391,7 @@ export default function ScannerPage() {
         try {
           await track.applyConstraints(constraints);
         } catch {
-          // Some Android browsers accept getUserMedia constraints but reject live renegotiation.
+          // Some desktop webcams expose fixed capture modes and reject live renegotiation.
         }
       })
     );
@@ -1330,6 +1456,11 @@ export default function ScannerPage() {
     setActiveTracksCount(aggregate.activeTracks);
     setTracksList(aggregate.tracks);
     runtimeMetricsRef.current.memoryCurrentMb = getUsedHeapMb() ?? runtimeMetricsRef.current.memoryCurrentMb;
+    runtimeMetricsRef.current.cameraHealth = createCameraHealthSnapshot(
+      environmentStatsRef.current,
+      aggregate.camFrames,
+      runtimeMetricsRef.current.droppedFrameCount
+    );
     const snapshot = createMetricsSnapshot(runtimeMetricsRef.current, aggregate.tracks);
     maybeAdaptRuntimePerformance(snapshot, aggregate.detFrames, aggregate.camFrames);
     const adaptedSnapshot = createMetricsSnapshot(runtimeMetricsRef.current, aggregate.tracks);
@@ -1420,6 +1551,10 @@ export default function ScannerPage() {
   }, [availableCameras]);
 
   useEffect(() => {
+    cameraMetadataBySlotRef.current = cameraMetadataBySlot;
+  }, [cameraMetadataBySlot]);
+
+  useEffect(() => {
     activeCameraSlotIdRef.current = activeCameraSlotId;
   }, [activeCameraSlotId]);
 
@@ -1430,6 +1565,14 @@ export default function ScannerPage() {
   useEffect(() => {
     isScanningRef.current = isScanning;
   }, [isScanning]);
+
+  useEffect(() => {
+    developerModeRef.current = developerMode;
+  }, [developerMode]);
+
+  useEffect(() => {
+    datasetModeRef.current = datasetMode;
+  }, [datasetMode]);
 
   useEffect(() => {
     supportsMultiCameraScanRef.current = supportsMultiCameraScan;
@@ -1486,10 +1629,10 @@ export default function ScannerPage() {
         0.35,
         0.7
       ),
-      debugMode: false,
+      debugMode: developerMode,
       showCenterGuide: false,
     };
-  }, [settings, soundEnabled]);
+  }, [developerMode, settings, soundEnabled]);
 
   useEffect(() => {
     const initTimer = window.setTimeout(() => {
@@ -1543,24 +1686,29 @@ export default function ScannerPage() {
   async function refreshCameraList() {
     if (!navigator.mediaDevices?.enumerateDevices) {
       setCameraError('Camera devices are not available in this browser.');
-      return [] as MediaDeviceInfo[];
+      return [] as DesktopCameraDevice[];
     }
 
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter((device) => device.kind === 'videoinput');
-      setAvailableCameras(videoDevices);
+      const videoDevices = await enumerateDesktopCameras();
+      const rememberedDeviceId = getRememberedCameraId();
+      const preferredCamera = selectPreferredCamera(videoDevices, rememberedDeviceId);
       setCameraSlots((slots) =>
         slots.map((slot, index) => ({
           ...slot,
-          deviceId: slot.deviceId || videoDevices[index]?.deviceId || videoDevices[0]?.deviceId || '',
+          deviceId:
+            slot.deviceId ||
+            (index === 0 ? preferredCamera?.deviceId : videoDevices[index]?.deviceId) ||
+            videoDevices[0]?.deviceId ||
+            '',
         }))
       );
+      setAvailableCameras(videoDevices);
       setCameraError('');
       return videoDevices;
     } catch {
       setCameraError('Unable to read camera list. Please allow camera access.');
-      return [] as MediaDeviceInfo[];
+      return [] as DesktopCameraDevice[];
     }
   }
 
@@ -1576,6 +1724,7 @@ export default function ScannerPage() {
     });
     activeStreamsRef.current = {};
     setPreviewSlotIds([]);
+    setCameraMetadataBySlot({});
     setIsCameraReady(false);
     if (!options.preserveScanningState) {
       setIsScanning(false);
@@ -1595,12 +1744,11 @@ export default function ScannerPage() {
       let stream = activeStreamsRef.current[streamKey];
 
       if (!stream) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: getCameraVideoConstraints(slot, runtimeMetricsRef.current.adaptationLevel),
-          audio: false,
-        });
+        stream = await openDesktopCameraStream(slot.deviceId, adaptiveConfigRef.current.camera);
         activeStreamsRef.current[streamKey] = stream;
       }
+      const cameraDevice = availableCamerasRef.current.find((device) => device.deviceId === slot.deviceId) || null;
+      const cameraMetadata = getCameraRuntimeMetadata(stream, cameraDevice);
 
       const video = videoRefs.current[slot.id];
       if (video) {
@@ -1612,6 +1760,17 @@ export default function ScannerPage() {
         await video.play().catch(() => undefined);
       }
 
+      stream.getVideoTracks().forEach((track) => {
+        track.onended = () => {
+          if (!isCameraReadyRef.current && !isScanningRef.current) return;
+          window.setTimeout(() => {
+            void startVisibleCamerasRef.current({ resumeScanning: isScanningRef.current });
+          }, 1200);
+        };
+      });
+
+      rememberSelectedCamera(slot.deviceId || cameraMetadata.deviceId);
+      setCameraMetadataBySlot((prev) => ({ ...prev, [slot.id]: cameraMetadata }));
       setPreviewSlotIds((ids) => (ids.includes(slot.id) ? ids : [...ids, slot.id]));
       setCameraError('');
       return true;
@@ -1668,6 +1827,7 @@ export default function ScannerPage() {
   };
 
   const handleCameraSlotDeviceChange = (slotId: string, deviceId: string) => {
+    rememberSelectedCamera(deviceId);
     setCameraSlots((slots) => slots.map((slot) => (slot.id === slotId ? { ...slot, deviceId } : slot)));
     setPreviewSlotIds((ids) => ids.filter((id) => id !== slotId));
     handleSelectActiveSlot(slotId);
@@ -1919,6 +2079,10 @@ export default function ScannerPage() {
             ? 'DATABASE_POSSIBLE_MATCH'
             : 'DATABASE_NO_MATCH',
         deviceTier: runtimeMetricsRef.current.deviceTier,
+        environment: runtimeMetricsRef.current.currentEnvironment,
+        environmentConfidence: runtimeMetricsRef.current.currentEnvironmentConfidence,
+        qualityClass: runtimeMetricsRef.current.currentQuality,
+        qualityConfidence: runtimeMetricsRef.current.currentQualityConfidence,
       });
       if (completedTrackEventsRef.current.length > 500) {
         completedTrackEventsRef.current.length = 500;
@@ -1945,6 +2109,107 @@ export default function ScannerPage() {
     [getCameraSlotLabelFromRefs, role]
   );
 
+  const queueEnvironmentSample = useCallback(
+    (sourceCanvas: HTMLCanvasElement, cameraFpsEstimate: number) => {
+      if (environmentInferenceRunningRef.current || sourceCanvas.width === 0 || sourceCanvas.height === 0) return;
+
+      environmentInferenceRunningRef.current = true;
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = sourceCanvas.width;
+      sampleCanvas.height = sourceCanvas.height;
+      const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+      if (!sampleCtx) {
+        environmentInferenceRunningRef.current = false;
+        return;
+      }
+
+      sampleCtx.drawImage(sourceCanvas, 0, 0);
+
+      void (async () => {
+        try {
+          const profile = await classifyEnvironment(sampleCanvas, environmentStatsRef.current);
+          environmentStatsRef.current = profile.stats;
+          environmentProfileRef.current = profile;
+          const nextConfig = createAdaptiveScannerConfig(profile);
+          adaptiveConfigRef.current = nextConfig;
+
+          const metrics = runtimeMetricsRef.current;
+          metrics.currentEnvironment = profile.label;
+          metrics.currentEnvironmentConfidence = profile.confidence;
+          metrics.currentEnvironmentSource = profile.source;
+          metrics.environmentDistribution = incrementDistribution(metrics.environmentDistribution, profile.label);
+          metrics.cameraHealth = createCameraHealthSnapshot(
+            profile.stats,
+            cameraFpsEstimate,
+            metrics.droppedFrameCount
+          );
+
+          setEnvironmentProfile(profile);
+          setAdaptiveConfigSnapshot(nextConfig);
+
+          Object.values(slotRuntimesRef.current).forEach((runtime) => {
+            runtime.bestFrameSelector.configure({
+              maxBufferSize: nextConfig.buffer.maxSize,
+              maxEntryAgeMs: nextConfig.buffer.maxEntryAgeMs,
+            });
+          });
+
+          void applyActiveCameraConstraints();
+        } catch (err) {
+          console.warn('[Scanner] Environment classifier failed:', err);
+        } finally {
+          releaseCanvasMemory(sampleCanvas);
+          environmentInferenceRunningRef.current = false;
+        }
+      })();
+    },
+    [applyActiveCameraConstraints]
+  );
+
+  const collectDatasetSample = useCallback(
+    (args: {
+      sourceCanvas: HTMLCanvasElement;
+      cropCanvas: HTMLCanvasElement;
+      sourceSlotId: string;
+      environment: EnvironmentClass;
+      environmentConfidence: number;
+      qualityClass: PlateQualityClass;
+      qualityConfidence: number;
+      ocrResult: string;
+      ocrConfidence: number;
+      detectorConfidence: number;
+      trackConfidence: number;
+    }) => {
+      if (!datasetModeRef.current) return;
+
+      const timestamp = new Date().toISOString();
+      const id = `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const folderPath = `dataset/${args.environment.toLowerCase()}/${args.qualityClass.toLowerCase()}/${id}`;
+      const sample: DatasetSample = {
+        id,
+        timestamp,
+        folderPath,
+        originalImageDataUrl: canvasToJpegDataUrl(args.sourceCanvas, 0.72),
+        plateCropDataUrl: canvasToJpegDataUrl(args.cropCanvas, 0.88),
+        environmentClass: args.environment,
+        environmentConfidence: args.environmentConfidence,
+        qualityClass: args.qualityClass,
+        qualityConfidence: args.qualityConfidence,
+        ocrResult: args.ocrResult,
+        ocrConfidence: args.ocrConfidence,
+        detectorConfidence: args.detectorConfidence,
+        trackConfidence: args.trackConfidence,
+        camera: cameraMetadataBySlotRef.current[args.sourceSlotId] ?? null,
+      };
+
+      datasetSamplesRef.current.unshift(sample);
+      if (datasetSamplesRef.current.length > DATASET_SAMPLE_LIMIT) {
+        datasetSamplesRef.current.length = DATASET_SAMPLE_LIMIT;
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     if (!isCameraReady || !isScanning) return;
 
@@ -1965,6 +2230,7 @@ export default function ScannerPage() {
       let detectionTimeout: ReturnType<typeof setTimeout> | undefined;
       let lastVideoTime = -1;
       let lastDetectorValidationAt = 0;
+      let lastEnvironmentSampleAt = 0;
       let adaptiveDetectorIntervalMs = getTierDetectorTargetMs(runtimeMetricsRef.current.deviceTier);
 
       const scheduleDetection = (delay = 100) => {
@@ -1997,11 +2263,13 @@ export default function ScannerPage() {
         }
 
         const processingCanvas = runtime.processingCanvas;
+        const adaptiveConfig = adaptiveConfigRef.current;
         const processingDimensions = getProcessingDimensions(
           video.videoWidth,
           video.videoHeight,
           runtimeMetricsRef.current.deviceTier,
-          runtimeMetricsRef.current.adaptationLevel
+          runtimeMetricsRef.current.adaptationLevel,
+          adaptiveConfig.processing.maxLongEdge
         );
         if (processingCanvas.width !== processingDimensions.width || processingCanvas.height !== processingDimensions.height) {
           processingCanvas.width = processingDimensions.width;
@@ -2016,16 +2284,24 @@ export default function ScannerPage() {
 
         const detectionStartedAt = performance.now();
         processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
-        if (isAndroidDevice()) {
-          await yieldToBrowser();
+        await yieldToBrowser();
+
+        const sampleNow = Date.now();
+        if (sampleNow - lastEnvironmentSampleAt >= ENVIRONMENT_SAMPLE_INTERVAL_MS) {
+          lastEnvironmentSampleAt = sampleNow;
+          queueEnvironmentSample(processingCanvas, metrics.camFrames);
         }
 
         const scannerSettings = settingsRef.current;
+        runtime.tracker.setLostTrackTimeout(
+          Math.round((scannerSettings.lostTrackTimeout || INITIAL_SETTINGS.lostTrackTimeout) * adaptiveConfigRef.current.track.lifetimeMultiplier)
+        );
+        runtime.tracker.setMaxActiveTracks(scannerSettings.maxTracks || INITIAL_SETTINGS.maxTracks);
         let detectedPlates: Awaited<ReturnType<typeof detectMalaysianPlates>> = [];
 
         try {
           detectedPlates = await detectMalaysianPlates(processingCanvas, {
-            minConfidence: scannerSettings.detectionThreshold,
+            minConfidence: Math.max(scannerSettings.detectionThreshold, adaptiveConfigRef.current.detector.minConfidence),
             enginePreference: scannerSettings.detectorEngine,
             developerMode: scannerSettings.debugMode,
           });
@@ -2038,6 +2314,7 @@ export default function ScannerPage() {
         runtimeMetrics.detectorLatencyTotalMs += detectorElapsedMs;
         runtimeMetrics.detectorLatencySamples++;
         pushBoundedMetricSample(runtimeMetrics.detectorLatencyHistoryMs, detectorElapsedMs);
+        addEnvironmentDetectorSample(runtimeMetrics, runtimeMetrics.currentEnvironment, detectorElapsedMs);
         if (detectorElapsedMs > adaptiveDetectorIntervalMs * 1.5) {
           runtimeMetrics.droppedFrameCount++;
         }
@@ -2099,8 +2376,8 @@ export default function ScannerPage() {
           if (!isTrackAvailableForReading(track)) return;
 
           if (
-            !isAndroidDevice() &&
-            (!track.lastOverlayAngleAt || cropSampleNow - track.lastOverlayAngleAt >= OVERLAY_ANGLE_SAMPLE_MS)
+            !track.lastOverlayAngleAt ||
+            cropSampleNow - track.lastOverlayAngleAt >= OVERLAY_ANGLE_SAMPLE_MS
           ) {
             track.overlayAngle = estimatePlateOverlayAngle(processingCanvas, track.bbox, track.overlayAngle ?? 0);
             track.lastOverlayAngleAt = cropSampleNow;
@@ -2119,7 +2396,7 @@ export default function ScannerPage() {
           const sampleInterval = getTierCropSampleIntervalMs(
             track.bbox.confidence >= 0.7 ? CROP_SAMPLE_FAST_MS : CROP_SAMPLE_NORMAL_MS,
             runtimeMetricsRef.current.deviceTier
-          );
+          ) * adaptiveConfigRef.current.buffer.cropSampleIntervalMultiplier;
           if (existingCrop && track.lastCropSampledAt && cropSampleNow - track.lastCropSampledAt < sampleInterval) {
             return;
           }
@@ -2140,18 +2417,25 @@ export default function ScannerPage() {
 
         const latencyDrivenInterval = clampNumber(
           Math.round(detectorElapsedMs * 1.45),
-          getTierDetectorTargetMs(runtimeMetricsRef.current.deviceTier),
-          250
+          Math.max(
+            adaptiveConfigRef.current.detector.targetIntervalMs,
+            getTierDetectorTargetMs(runtimeMetricsRef.current.deviceTier)
+          ),
+          Math.max(250, adaptiveConfigRef.current.detector.busyIntervalMs)
         );
         adaptiveDetectorIntervalMs = Math.round(
           adaptiveDetectorIntervalMs * 0.75 + latencyDrivenInterval * 0.25
         );
         const targetInterval =
           activeOcrCount.current > 0
-            ? Math.max(adaptiveDetectorIntervalMs, getTierDetectorBusyIntervalMs(runtimeMetricsRef.current.deviceTier))
+            ? Math.max(
+                adaptiveDetectorIntervalMs,
+                adaptiveConfigRef.current.detector.busyIntervalMs,
+                getTierDetectorBusyIntervalMs(runtimeMetricsRef.current.deviceTier)
+              )
             : adaptiveDetectorIntervalMs;
         const nextDelay = Math.max(
-          DETECTION_MIN_DELAY_MS,
+          Math.max(DETECTION_MIN_DELAY_MS, adaptiveConfigRef.current.detector.minDelayMs),
           Math.round(targetInterval - (performance.now() - detectionStartedAt))
         );
         scheduleDetection(nextDelay);
@@ -2164,6 +2448,8 @@ export default function ScannerPage() {
         slotRuntime: SlotScannerRuntime,
         sourceSlotId: string
       ) => {
+        const adaptiveConfig = adaptiveConfigRef.current;
+
         if (!isPpOcrReady()) {
           confirmedTracks.forEach((track) => {
             if (!track.cooldownActive && track.ocrState !== 'MATCHED') {
@@ -2177,6 +2463,7 @@ export default function ScannerPage() {
         const maxOcrConcurrency = Math.min(
           OCR_MAX_CONCURRENCY,
           getTierOcrConcurrencyLimit(runtimeMetricsRef.current.deviceTier),
+          adaptiveConfig.ocr.maxConcurrency,
           Math.max(1, scannerSettings.maxOcrConcurrency || INITIAL_SETTINGS.maxOcrConcurrency)
         );
         const priorityIds = prioritiseTracks(
@@ -2195,6 +2482,12 @@ export default function ScannerPage() {
           const leftTrack = slotRuntime.tracker.getTrack(leftId);
           const rightTrack = slotRuntime.tracker.getTrack(rightId);
           if (!leftTrack || !rightTrack) return 0;
+
+          if (adaptiveConfig.track.prioritizeHighestConfidence) {
+            const leftConfidence = (leftTrack.trackConfidence ?? 0) + (leftTrack.bbox.confidence ?? 0);
+            const rightConfidence = (rightTrack.trackConfidence ?? 0) + (rightTrack.bbox.confidence ?? 0);
+            if (Math.abs(leftConfidence - rightConfidence) > 0.05) return rightConfidence - leftConfidence;
+          }
 
           const leftVotes = getTrackVoteCount(leftTrack);
           const rightVotes = getTrackVoteCount(rightTrack);
@@ -2233,7 +2526,10 @@ export default function ScannerPage() {
 
           const now = Date.now();
           const voteCount = getTrackVoteCount(track);
-          const retryDelay = voteCount === 0 ? OCR_FIRST_READ_RETRY_MS : OCR_REPEAT_READ_RETRY_MS;
+          const retryDelay =
+            voteCount === 0
+              ? Math.max(OCR_FIRST_READ_RETRY_MS, adaptiveConfig.ocr.firstReadRetryMs)
+              : Math.max(OCR_REPEAT_READ_RETRY_MS, adaptiveConfig.ocr.repeatReadRetryMs);
           if (track.lastOcrAttemptAt && now - track.lastOcrAttemptAt < retryDelay) continue;
 
           const motionMode = getMotionOcrMode(track);
@@ -2244,7 +2540,9 @@ export default function ScannerPage() {
           }
 
           const minTrackConfidence =
-            voteCount === 0 ? OCR_FIRST_READ_MIN_TRACK_CONFIDENCE : OCR_MIN_TRACK_CONFIDENCE;
+            voteCount === 0
+              ? Math.max(OCR_FIRST_READ_MIN_TRACK_CONFIDENCE, adaptiveConfig.ocr.firstReadMinTrackConfidence)
+              : Math.max(OCR_MIN_TRACK_CONFIDENCE, adaptiveConfig.ocr.minTrackConfidence);
           if ((track.trackConfidence ?? 0) < minTrackConfidence) {
             track.ocrState = 'COLLECTING';
             track.pipelineState = 'TRACKING';
@@ -2256,7 +2554,10 @@ export default function ScannerPage() {
             scannerSettings.minCropWidth || INITIAL_SETTINGS.minCropWidth
           );
           const bufferedCropCount = slotRuntime.bestFrameSelector.getCropCount(track.trackNumber);
-          const requiredCropCount = voteCount === 0 ? OCR_MIN_BUFFERED_CROPS : 1;
+          const requiredCropCount =
+            voteCount === 0
+              ? Math.max(OCR_MIN_BUFFERED_CROPS, adaptiveConfig.ocr.requiredBufferedCrops)
+              : 1;
           const hasEnoughBufferedCrops = bufferedCropCount >= requiredCropCount;
           const canReadFirstFrame = track.framesSeen >= OCR_MIN_TRACK_FRAMES || track.bbox.confidence >= 0.68;
 
@@ -2273,20 +2574,54 @@ export default function ScannerPage() {
           const bestFrameEntry = slotRuntime.bestFrameSelector.getBestCrop(track.trackNumber);
           const targetCropFromBest = !!bestFrameEntry?.canvas;
           const targetCrop = bestFrameEntry?.canvas ?? cropCanvasRegionFast(canvas, track.bbox);
-          const qualityReport = bestFrameEntry?.quality || { overallScore: 0.6, recommendation: 'MARGINAL' as const };
+          const releaseRejectedTargetCrop = () => {
+            if (!targetCropFromBest) releaseCanvasMemory(targetCrop);
+          };
+          const qualityReport = bestFrameEntry?.quality;
           const bestCropAge = bestFrameEntry ? now - bestFrameEntry.timestamp : 0;
           const minQualityForOcr = Math.max(
             scannerSettings.minCropQuality || INITIAL_SETTINGS.minCropQuality,
-            voteCount === 0 ? OCR_FIRST_READ_MIN_QUALITY : OCR_REPEAT_READ_MIN_QUALITY
+            adaptiveConfig.ocr.minQuality,
+            voteCount === 0
+              ? Math.max(OCR_FIRST_READ_MIN_QUALITY, adaptiveConfig.ocr.firstReadMinQuality)
+              : Math.max(OCR_REPEAT_READ_MIN_QUALITY, adaptiveConfig.ocr.repeatReadMinQuality)
           );
 
           if (
-            (voteCount === 0 && bestCropAge > OCR_MAX_BEST_CROP_AGE_MS) ||
-            qualityReport.recommendation === 'REJECT' ||
-            qualityReport.overallScore < minQualityForOcr
+            (voteCount === 0 && bestCropAge > Math.max(OCR_MAX_BEST_CROP_AGE_MS, adaptiveConfig.ocr.maxBestCropAgeMs)) ||
+            qualityReport?.recommendation === 'REJECT' ||
+            (qualityReport?.overallScore ?? 0.6) < minQualityForOcr
           ) {
             track.ocrState = 'LOW QUALITY';
             track.pipelineState = 'COLLECTING';
+            releaseRejectedTargetCrop();
+            continue;
+          }
+
+          const modelQuality = await classifyPlateQuality(targetCrop, {
+            heuristicReport: qualityReport,
+            minReadableWidth,
+            minQualityScore: minQualityForOcr,
+            acceptedClasses: adaptiveConfig.qualityGate.acceptedClasses,
+            marginalClasses: adaptiveConfig.qualityGate.marginalClasses,
+            minimumClassifierConfidence: adaptiveConfig.qualityGate.minimumClassifierConfidence,
+          });
+          runtimeMetricsRef.current.currentQuality = modelQuality.label;
+          runtimeMetricsRef.current.currentQualityConfidence = modelQuality.confidence;
+          runtimeMetricsRef.current.currentQualitySource = modelQuality.source;
+          runtimeMetricsRef.current.qualityDistribution = incrementDistribution(
+            runtimeMetricsRef.current.qualityDistribution,
+            modelQuality.label
+          );
+
+          if (track.stats) {
+            track.stats.bestCropQuality = Math.max(track.stats.bestCropQuality ?? 0, modelQuality.score);
+          }
+
+          if (!modelQuality.shouldSendToOcr) {
+            track.ocrState = 'LOW QUALITY';
+            track.pipelineState = 'COLLECTING';
+            releaseRejectedTargetCrop();
             continue;
           }
 
@@ -2296,12 +2631,13 @@ export default function ScannerPage() {
               ocrQueuePressure,
               priorityIndex,
               maxOcrConcurrency,
-              qualityReport.overallScore
+              modelQuality.score
             )
           ) {
             track.ocrState = 'COLLECTING';
             track.pipelineState = 'COLLECTING';
             runtimeMetricsRef.current.ocrSkippedQueuePressureCount++;
+            releaseRejectedTargetCrop();
             continue;
           }
 
@@ -2314,6 +2650,11 @@ export default function ScannerPage() {
           if (track.stats) track.stats.ocrAttempts++;
           runtimeMetricsRef.current.ocrAttemptCount++;
           activeOcrCount.current++;
+          const ocrEnvironment = runtimeMetricsRef.current.currentEnvironment;
+          const ocrEnvironmentConfidence = runtimeMetricsRef.current.currentEnvironmentConfidence;
+          const ocrQualityClass = modelQuality.label;
+          const ocrQualityConfidence = modelQuality.confidence;
+          const ocrQualityScore = modelQuality.score;
 
           void (async () => {
             const ocrStartedAt = performance.now();
@@ -2328,11 +2669,17 @@ export default function ScannerPage() {
               if (!targetCropFromBest) rememberTransientCanvas(targetCrop);
 
               const activeTrackLoad = Math.max(1, confirmedTracks.length);
-              const fastOcrPass = runtimeMetricsRef.current.deviceTier !== 'A' || activeTrackLoad >= 2;
-              const ultraFastOcrPass = runtimeMetricsRef.current.deviceTier === 'D' || isConstrainedAndroidDevice();
+              const fastOcrPass =
+                runtimeMetricsRef.current.deviceTier !== 'A' ||
+                activeTrackLoad >= 2 ||
+                adaptiveConfig.ocr.maxCandidateCrops <= 3;
+              const ultraFastOcrPass =
+                runtimeMetricsRef.current.deviceTier === 'D' ||
+                adaptiveConfigRef.current.ocr.maxCandidateCrops <= 1;
               const innerCrops = ultraFastOcrPass
                 ? []
                 : (() => {
+                    if (!adaptiveConfig.ocr.useInnerTextCrop) return [];
                     const innerTextCrop = createInnerPlateTextCrop(targetCrop);
                     rememberTransientCanvas(innerTextCrop);
                     return generateAdaptiveCrops(
@@ -2340,7 +2687,7 @@ export default function ScannerPage() {
                       { x: 0, y: 0, width: innerTextCrop.width, height: innerTextCrop.height, confidence: 1 },
                       360,
                       108,
-                      fastOcrPass ? ['ORIGINAL'] : ['ORIGINAL', 'INVERTED']
+                      fastOcrPass ? ['ORIGINAL'] : adaptiveConfig.processing.preprocessingVariants.slice(0, 2)
                     );
                   })();
               innerCrops.forEach((crop) => {
@@ -2352,11 +2699,11 @@ export default function ScannerPage() {
               const fullCropVariants =
                 ultraFastOcrPass
                   ? (['ORIGINAL'] as const)
-                  : fastOcrPass
-                  ? (['ORIGINAL', 'DARK_BG'] as const)
-                  : activeTrackLoad >= 3
-                  ? (['ORIGINAL', 'DARK_BG', 'INVERTED'] as const)
-                  : (['ORIGINAL', 'SHARPEN', 'DARK_BG', 'INVERTED'] as const);
+                : fastOcrPass
+                  ? adaptiveConfig.processing.preprocessingVariants.slice(0, 2)
+                : activeTrackLoad >= 3
+                  ? adaptiveConfig.processing.preprocessingVariants.slice(0, 3)
+                  : adaptiveConfig.processing.preprocessingVariants;
               const adaptiveCrops = generateAdaptiveCrops(
                 targetCrop,
                 { x: 0, y: 0, width: targetCrop.width, height: targetCrop.height, confidence: 1 },
@@ -2370,7 +2717,10 @@ export default function ScannerPage() {
                 rememberTransientCanvas(crop.bottomLineCanvas);
               });
 
-              const maxCandidateCrops = ultraFastOcrPass ? 1 : fastOcrPass ? 3 : activeTrackLoad >= 3 ? 4 : 6;
+              const maxCandidateCrops = Math.max(
+                1,
+                Math.min(adaptiveConfig.ocr.maxCandidateCrops, ultraFastOcrPass ? 1 : fastOcrPass ? 3 : activeTrackLoad >= 3 ? 4 : 6)
+              );
               const candidateCrops = (fastOcrPass ? [...adaptiveCrops, ...innerCrops] : [...innerCrops, ...adaptiveCrops]).slice(
                 0,
                 maxCandidateCrops
@@ -2387,9 +2737,7 @@ export default function ScannerPage() {
               let bestPatternValid = false;
 
               for (const crop of candidateCrops.length > 0 ? candidateCrops : [fallbackCrop]) {
-                if (isAndroidDevice()) {
-                  await yieldToBrowser();
-                }
+                await yieldToBrowser();
                 const result = await recognizePlateFromCanvas(crop.canvas, crop.isTwoLine);
                 const resultText = result.normalizedPlate || result.text;
                 const pattern = validateMalaysianPattern(resultText);
@@ -2415,11 +2763,25 @@ export default function ScannerPage() {
                 }
               }
 
+              collectDatasetSample({
+                sourceCanvas: canvas,
+                cropCanvas: targetCrop,
+                sourceSlotId,
+                environment: ocrEnvironment,
+                environmentConfidence: ocrEnvironmentConfidence,
+                qualityClass: ocrQualityClass,
+                qualityConfidence: ocrQualityConfidence,
+                ocrResult: text,
+                ocrConfidence: conf,
+                detectorConfidence: track.bbox.confidence ?? 0,
+                trackConfidence: track.trackConfidence ?? 0,
+              });
+
               const updatedTrack = slotRuntime.tracker.getTrack(trackId);
               if (!updatedTrack || updatedTrack.cooldownActive || !isTrackAvailableForReading(updatedTrack)) return;
 
               if (text && conf >= 0.25) {
-                addOcrVoteToTrack(updatedTrack, text, conf, qualityReport.overallScore);
+                addOcrVoteToTrack(updatedTrack, text, conf, modelQuality.score);
                 if (updatedTrack.stats) updatedTrack.stats.ocrAccepted++;
                 runtimeMetricsRef.current.ocrAcceptedCount++;
                 updatedTrack.ocrState = 'CONSENSUS_BUILDING';
@@ -2428,24 +2790,37 @@ export default function ScannerPage() {
                 const acceptedVoteCount = getTrackVoteCount(updatedTrack);
                 const { digits } = countPlateChars(text);
                 const canFastMatch = bestPatternValid && digits >= (text.length >= 5 ? 2 : 1);
+                const adaptiveRecognitionThreshold = Math.max(
+                  scannerSettings.recognitionThreshold,
+                  adaptiveConfig.ocr.recognitionThreshold
+                );
+                const adaptiveConsensusVotes = Math.max(
+                  scannerSettings.consensusVotes,
+                  adaptiveConfig.ocr.consensusVotes
+                );
                 const veryStrongRead =
-                  canFastMatch && conf >= Math.max(0.6, scannerSettings.recognitionThreshold) && bestScore >= 0.7;
-                const mobileStrongSingleRead = fastOcrPass && canFastMatch && conf >= 0.32 && bestScore >= 0.62;
+                  canFastMatch && conf >= Math.max(0.6, adaptiveRecognitionThreshold) && bestScore >= 0.7;
+                const desktopFastSingleRead =
+                  fastOcrPass &&
+                  adaptiveConfigRef.current.ocr.consensusVotes <= 2 &&
+                  canFastMatch &&
+                  conf >= 0.32 &&
+                  bestScore >= 0.62;
                 const strongRead = canFastMatch && conf >= 0.32 && bestScore >= 0.56;
                 const requiredVotes = veryStrongRead
                   ? 1
-                  : mobileStrongSingleRead
+                  : desktopFastSingleRead
                     ? 1
                   : strongRead
-                    ? Math.min(2, scannerSettings.consensusVotes)
-                    : scannerSettings.consensusVotes;
+                    ? Math.min(2, adaptiveConsensusVotes)
+                    : adaptiveConsensusVotes;
                 const confidenceGate = veryStrongRead
-                  ? Math.min(scannerSettings.recognitionThreshold, 0.58)
-                  : mobileStrongSingleRead
-                    ? Math.min(scannerSettings.recognitionThreshold, 0.52)
+                  ? Math.min(adaptiveRecognitionThreshold, 0.58)
+                  : desktopFastSingleRead
+                    ? Math.min(adaptiveRecognitionThreshold, 0.52)
                   : strongRead
-                    ? Math.min(scannerSettings.recognitionThreshold, 0.45)
-                    : scannerSettings.recognitionThreshold;
+                    ? Math.min(adaptiveRecognitionThreshold, 0.45)
+                    : adaptiveRecognitionThreshold;
                 if (updatedTrack.stats) updatedTrack.stats.consensusAttempts++;
                 runtimeMetricsRef.current.consensusAttemptCount++;
                 const consensus = evaluateConsensus(updatedTrack, requiredVotes, confidenceGate);
@@ -2487,6 +2862,7 @@ export default function ScannerPage() {
               runtimeMetricsRef.current.ocrLatencyTotalMs += ocrElapsedMs;
               runtimeMetricsRef.current.ocrLatencySamples++;
               pushBoundedMetricSample(runtimeMetricsRef.current.ocrLatencyHistoryMs, ocrElapsedMs);
+              addEnvironmentOcrSample(runtimeMetricsRef.current, ocrEnvironment, ocrElapsedMs, ocrQualityScore);
               const refreshedTrack = slotRuntime.tracker.getTrack(trackId);
               if (refreshedTrack) {
                 refreshedTrack.ocrRunning = false;
@@ -2516,7 +2892,8 @@ export default function ScannerPage() {
                 video.videoWidth,
                 video.videoHeight,
                 runtimeMetricsRef.current.deviceTier,
-                runtimeMetricsRef.current.adaptationLevel
+                runtimeMetricsRef.current.adaptationLevel,
+                adaptiveConfigRef.current.processing.maxLongEdge
               );
           if (overlayCanvas.width !== overlayDimensions.width || overlayCanvas.height !== overlayDimensions.height) {
             overlayCanvas.width = overlayDimensions.width;
@@ -2574,12 +2951,14 @@ export default function ScannerPage() {
     };
   }, [
     cameraSlots,
+    collectDatasetSample,
     ensureSlotMetrics,
     flushScannerMetrics,
     getSlotRuntime,
     isCameraReady,
     isScanning,
     previewSlotIds,
+    queueEnvironmentSample,
     runDatabaseMatch,
     supportsMultiCameraScan,
   ]);
@@ -2685,6 +3064,26 @@ export default function ScannerPage() {
       performanceTargets: SCANNER_PERFORMANCE_TARGETS,
       health,
       metrics: snapshot,
+      environment: {
+        current: snapshot.currentEnvironment,
+        confidence: snapshot.currentEnvironmentConfidence,
+        source: snapshot.currentEnvironmentSource,
+        modelStatus: getEnvironmentModelStatus(),
+        distributionPercent: serializeDistributionPercentages(snapshot.environmentDistribution),
+        perEnvironmentStats: snapshot.environmentStats,
+      },
+      quality: {
+        current: snapshot.currentQuality,
+        confidence: snapshot.currentQualityConfidence,
+        source: snapshot.currentQualitySource,
+        modelStatus: getPlateQualityModelStatus(),
+        distributionPercent: serializeDistributionPercentages(snapshot.qualityDistribution),
+      },
+      camera: {
+        selectedSlotId: activeCameraSlotIdRef.current,
+        metadataBySlot: cameraMetadataBySlotRef.current,
+        health: snapshot.cameraHealth,
+      },
       runtimeConfig: {
         executionMode: snapshot.executionMode,
         cameraProfile: snapshot.cameraProfile,
@@ -2697,8 +3096,8 @@ export default function ScannerPage() {
         performanceModeReason: snapshot.performanceModeReason,
         detectorTargetMs: getTierDetectorTargetMs(snapshot.deviceTier),
         detectorBusyIntervalMs: getTierDetectorBusyIntervalMs(snapshot.deviceTier),
-        inAppBrowser: isInAppBrowser(),
-        android: isAndroidDevice(),
+        adaptiveConfig: adaptiveConfigRef.current,
+        supportedDesktopBrowser: isSupportedDesktopScannerBrowser(),
       },
       detectorMetrics: {
         medianLatencyMs: snapshot.detectorLatencyMedianMs,
@@ -2741,6 +3140,51 @@ export default function ScannerPage() {
     downloadJson(`track_scanner_metrics_${Date.now()}.json`, payload);
   };
 
+  const handleExportDataset = () => {
+    const samples = datasetSamplesRef.current;
+    const yoloDataset = samples.map((sample) => ({
+      imagePath: `${sample.folderPath}/original.jpg`,
+      cropPath: `${sample.folderPath}/plate_crop.jpg`,
+      label: 'license-plate',
+      detectorConfidence: sample.detectorConfidence,
+      environmentClass: sample.environmentClass,
+      camera: sample.camera,
+      timestamp: sample.timestamp,
+    }));
+    const ocrDataset = samples.map((sample) => ({
+      imagePath: `${sample.folderPath}/plate_crop.jpg`,
+      text: sample.ocrResult,
+      confidence: sample.ocrConfidence,
+      qualityClass: sample.qualityClass,
+      environmentClass: sample.environmentClass,
+      timestamp: sample.timestamp,
+    }));
+    const classificationDataset = samples.flatMap((sample) => [
+      {
+        imagePath: `${sample.folderPath}/original.jpg`,
+        task: 'environment',
+        className: sample.environmentClass,
+        confidence: sample.environmentConfidence,
+      },
+      {
+        imagePath: `${sample.folderPath}/plate_crop.jpg`,
+        task: 'plate_quality',
+        className: sample.qualityClass,
+        confidence: sample.qualityConfidence,
+      },
+    ]);
+
+    downloadJson(`track_dataset_export_${Date.now()}.json`, {
+      exportedAt: new Date().toISOString(),
+      sampleCount: samples.length,
+      folderStructure: samples.map((sample) => sample.folderPath),
+      yoloDataset,
+      ocrDataset,
+      classificationDataset,
+      samples,
+    });
+  };
+
   const runtimeReady = isRuntimeScanningReady(runtimeState);
   const visibleTrack = tracksList.find((track) => getTrackPlateText(track)) || tracksList[0] || null;
   const activeScanTileCount = supportsMultiCameraScan
@@ -2772,8 +3216,11 @@ export default function ScannerPage() {
       ? 'NONE'
       : null;
 
-  const showDeveloperOverlay = false;
-  const showInAppBrowserWarning = isAndroidDevice() && isInAppBrowser();
+  const showDeveloperOverlay = developerMode;
+  const showUnsupportedBrowserWarning = typeof navigator !== 'undefined' && !isSupportedDesktopScannerBrowser();
+  const activeCameraMetadata = cameraMetadataBySlot[activeCameraSlotId];
+  const environmentDistributionPercent = serializeDistributionPercentages(runtimeMetricsSnapshot.environmentDistribution);
+  const qualityDistributionPercent = serializeDistributionPercentages(runtimeMetricsSnapshot.qualityDistribution);
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto px-1 sm:px-0">
@@ -2797,6 +3244,49 @@ export default function ScannerPage() {
         </div>
 
         <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void refreshCameraList()}
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-300 transition-all hover:border-cyan-700 hover:text-cyan-300"
+              title="Refresh cameras"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Refresh</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeveloperMode((value) => !value)}
+              className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+                developerMode
+                  ? 'border-cyan-700 bg-cyan-950 text-cyan-200'
+                  : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-cyan-700 hover:text-cyan-300'
+              }`}
+            >
+              <Brain className="w-4 h-4" />
+              <span>Dev</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDatasetMode((value) => !value)}
+              className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+                datasetMode
+                  ? 'border-emerald-700 bg-emerald-950 text-emerald-200'
+                  : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-emerald-700 hover:text-emerald-300'
+              }`}
+            >
+              <Download className="w-4 h-4" />
+              <span>Dataset</span>
+            </button>
+            {datasetSamplesRef.current.length > 0 && (
+              <button
+                type="button"
+                onClick={handleExportDataset}
+                className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-emerald-800 bg-emerald-950 px-3 py-2 text-xs font-bold text-emerald-200 transition-all hover:bg-emerald-900"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export</span>
+              </button>
+            )}
             {supportsMultiCameraScan && (
               <button
                 type="button"
@@ -2860,16 +3350,55 @@ export default function ScannerPage() {
         />
       )}
 
-      {showInAppBrowserWarning && (
+      {showUnsupportedBrowserWarning && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-700 bg-amber-950/35 px-3 py-2 text-[11px] font-bold text-amber-200">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             {language === 'BM'
-              ? 'Pelayar dalam aplikasi boleh menyebabkan kamera dan AI menjadi perlahan. Buka TRACK dalam Chrome atau Samsung Internet untuk imbasan terbaik.'
-              : 'In-app browsers can slow camera and AI processing. Open TRACK in Chrome or Samsung Internet for best scanning performance.'}
+              ? 'Pengimbas produksi ini disokong untuk Chrome atau Edge terkini pada komputer riba Windows/macOS.'
+              : 'This production scanner is supported on the latest Chrome or Edge on Windows/macOS laptops.'}
           </span>
         </div>
       )}
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-3 shadow-xl">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Camera className="h-4 w-4 text-cyan-300" />
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">Scanner Status</span>
+          </div>
+          <span className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black uppercase text-slate-300">
+            {runtimeMetricsSnapshot.performanceMode.replace('_', ' ')}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          {[
+            ['Camera', activeCameraMetadata?.label || getCameraSlotLabel(cameraSlots[0], 0)],
+            [
+              'Resolution',
+              activeCameraMetadata?.width
+                ? `${activeCameraMetadata.width}x${activeCameraMetadata.height}`
+                : `${adaptiveConfigSnapshot.camera.idealWidth}x${adaptiveConfigSnapshot.camera.idealHeight}`,
+            ],
+            ['FPS', camFps ? camFps.toFixed(0) : activeCameraMetadata?.fps?.toFixed(0) || '0'],
+            ['Environment', `${environmentProfile.label} ${Math.round(environmentProfile.confidence * 100)}%`],
+            ['Backend', `${detectorProvider}/${ocrProvider}`],
+            ['System Health', `${systemHealthSnapshot.overallScore}%`],
+            ['Detector FPS', detFps.toFixed(0)],
+            ['OCR Queue', runtimeMetricsSnapshot.lastOcrQueueDepth.toFixed(0)],
+            ['Quality', `${runtimeMetricsSnapshot.currentQuality} ${Math.round(runtimeMetricsSnapshot.currentQualityConfidence * 100)}%`],
+            ['Current Environment', runtimeMetricsSnapshot.currentEnvironment],
+            ['Current Camera', activeCameraMetadata?.kind?.replaceAll('_', ' ') || 'UNKNOWN'],
+            ['Developer Mode', developerMode ? 'ON' : 'OFF'],
+            ['Dataset Mode', datasetMode ? `${datasetSamplesRef.current.length} samples` : 'OFF'],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2">
+              <div className="truncate text-[9px] font-bold uppercase text-slate-500">{label}</div>
+              <div className="mt-0.5 truncate font-mono text-[11px] font-black text-slate-100">{value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {latestDetection && latestResultTone && (
         <div
@@ -3007,7 +3536,10 @@ export default function ScannerPage() {
                     className="h-7 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900/90 px-2 text-[10px] font-bold text-slate-200 outline-none hover:border-cyan-700 focus:border-cyan-500"
                     title={language === 'BM' ? 'Pilih kamera' : 'Choose camera'}
                   >
-                    {(availableCameras.length > 0 ? availableCameras : [{ deviceId: '', label: slotLabel } as MediaDeviceInfo]).map(
+                    {(availableCameras.length > 0
+                      ? availableCameras
+                      : [{ deviceId: '', groupId: '', label: slotLabel, kind: 'UNKNOWN_CAMERA' as const }]
+                    ).map(
                       (cameraDevice, cameraIndex) => (
                         <option key={cameraDevice.deviceId || `camera-${cameraIndex}`} value={cameraDevice.deviceId}>
                           {cameraDevice.label || (cameraIndex === 0 ? slotLabel : `Camera ${cameraIndex + 1}`)}
@@ -3141,7 +3673,16 @@ export default function ScannerPage() {
               className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-800 bg-cyan-950 px-2.5 py-1.5 text-[10px] font-bold text-cyan-200 hover:bg-cyan-900"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Export</span>
+              <span>Metrics</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportDataset}
+              disabled={datasetSamplesRef.current.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-800 bg-emerald-950 px-2.5 py-1.5 text-[10px] font-bold text-emerald-200 hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Dataset</span>
             </button>
           </div>
 
@@ -3178,6 +3719,10 @@ export default function ScannerPage() {
               ['Camera', runtimeMetricsSnapshot.cameraProfile],
               ['Detector target', `${getTierDetectorTargetMs(runtimeMetricsSnapshot.deviceTier)} ms`],
               ['OCR profile', runtimeMetricsSnapshot.ocrProfile],
+              ['Env model', getEnvironmentModelStatus()],
+              ['Quality model', getPlateQualityModelStatus()],
+              ['Environment', `${runtimeMetricsSnapshot.currentEnvironment} ${Math.round(runtimeMetricsSnapshot.currentEnvironmentConfidence * 100)}%`],
+              ['Quality', `${runtimeMetricsSnapshot.currentQuality} ${Math.round(runtimeMetricsSnapshot.currentQualityConfidence * 100)}%`],
               ['Detector P50', `${runtimeMetricsSnapshot.detectorLatencyMedianMs.toFixed(0)} ms`],
               ['Detector P95', `${runtimeMetricsSnapshot.detectorLatencyP95Ms.toFixed(0)} ms`],
               ['OCR P50', `${runtimeMetricsSnapshot.ocrLatencyMedianMs.toFixed(0)} ms`],
@@ -3211,6 +3756,27 @@ export default function ScannerPage() {
                 <div className="mt-0.5 font-mono text-xs font-black text-cyan-200">{count}</div>
               </div>
             ))}
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+            {Object.entries(environmentDistributionPercent)
+              .filter(([, value]) => value > 0)
+              .slice(0, 12)
+              .map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-2">
+                  <div className="text-[9px] font-bold uppercase text-slate-500">{label}</div>
+                  <div className="mt-0.5 font-mono text-xs font-black text-cyan-200">{value.toFixed(1)}%</div>
+                </div>
+              ))}
+            {Object.entries(qualityDistributionPercent)
+              .filter(([, value]) => value > 0)
+              .slice(0, 8)
+              .map(([label, value]) => (
+                <div key={`quality-${label}`} className="rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-2">
+                  <div className="text-[9px] font-bold uppercase text-slate-500">{label}</div>
+                  <div className="mt-0.5 font-mono text-xs font-black text-emerald-200">{value.toFixed(1)}%</div>
+                </div>
+              ))}
           </div>
         </div>
       )}

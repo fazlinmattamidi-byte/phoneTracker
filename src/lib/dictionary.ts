@@ -387,7 +387,7 @@ export const dictionary: Record<Language, Record<string, string>> = {
 
     // Camera Page
     manageCamerasTitle: 'ANPR Camera Network',
-    manageCamerasSub: 'Monitor RTSP, USB, and mobile camera feeds.',
+    manageCamerasSub: 'Monitor RTSP, USB, and external webcam feeds.',
     grid1: '1 Camera (Focus)',
     grid2: '2 Cameras (Dual)',
     grid4: '4 Cameras (Grid)',

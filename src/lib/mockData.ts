@@ -601,11 +601,11 @@ export const initialCameras: CameraDevice[] = [
   },
   {
     id: 'cam-04',
-    name: 'Mobile Enforcement Cam #4',
+    name: 'Vehicle External Webcam #4',
     location: 'Patrol Vehicle Alpha (Subang)',
     status: 'OFFLINE',
     type: 'WEBCAM',
-    url: 'webcam://mobile-unit-alpha',
+    url: 'webcam://vehicle-unit-alpha',
     fps: 0,
     resolution: '720p HD',
   },
