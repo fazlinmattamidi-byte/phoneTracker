@@ -10,9 +10,11 @@ import {
   CaseStatus,
   MatchType,
   SearchSource,
+  CharacterConfidence,
+  PlateCategory,
 } from './types';
 import { INITIAL_VEHICLES, INITIAL_SETTINGS } from './seedData';
-import { normalizePlate, isPossibleMatch, generateCandidatePlates } from '../anpr/normaliser';
+import { normalizePlate } from '../anpr/normaliser';
 import { evaluateDatabaseMatch } from '../anpr/matchingEngine';
 
 interface StorageSchema {
@@ -279,13 +281,13 @@ export class PlateQRepository {
     rawInput: string,
     source: SearchSource = 'MANUAL',
     confidence: number = 1.0,
-    charConfidences?: any[]
+    charConfidences?: CharacterConfidence[]
   ): {
     matchType: MatchType;
     matchedVehicle: VehicleCase | null;
     possibleMatches: VehicleCase[];
     normalizedPlate: string;
-    category?: string;
+    category?: PlateCategory;
   } {
     const store = loadStore();
     const evalRes = evaluateDatabaseMatch(

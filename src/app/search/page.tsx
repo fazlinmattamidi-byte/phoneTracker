@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Fragment, useEffect, useState } from 'react';
+import React, { Fragment, useEffect, useRef, useState } from 'react';
 import { useStorage } from '@/context/StorageContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -12,8 +12,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  Copy,
-  Check,
   Building2,
   User,
   Car,
@@ -35,11 +33,9 @@ export default function SearchPage() {
   const [exactResult, setExactResult] = useState<Vehicle | null>(null);
   const [possibleResults, setPossibleResults] = useState<Vehicle[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
-  const [copiedPlate, setCopiedPlate] = useState(false);
-  const [copiedCase, setCopiedCase] = useState(false);
-  const [actionMarked, setActionMarked] = useState(false);
   const [customActionNote, setCustomActionNote] = useState('');
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const executeSearchRef = useRef<(query: string) => void>(() => undefined);
   const searchHistory = history.filter((log) => log.type === 'SEARCH').slice(0, 6);
   const getSearchPlate = (log: (typeof searchHistory)[number]) =>
     log.plate || log.action.match(/(?:Manual Search|Manual Search Plate):\s*([A-Z0-9]+)/i)?.[1] || '-';
@@ -71,7 +67,6 @@ export default function SearchPage() {
 
     setPossibleResults(possibleMatches);
     setHasSearched(true);
-    setActionMarked(false);
 
     // Trigger history log if exact match found
     if (exactMatch) {
@@ -106,9 +101,13 @@ export default function SearchPage() {
   };
 
   useEffect(() => {
+    executeSearchRef.current = executeSearch;
+  });
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       const plateParam = cleanPlateNumber(new URLSearchParams(window.location.search).get('plate') || '');
-      if (plateParam) executeSearch(plateParam);
+      if (plateParam) executeSearchRef.current(plateParam);
     }, 50);
 
     return () => window.clearTimeout(timer);
@@ -120,7 +119,6 @@ export default function SearchPage() {
   };
 
   const handleMarkAction = () => {
-    setActionMarked(true);
     if (exactResult) {
       const flaggedObj = { ...exactResult, status: 'FLAGGED' as const };
       updateVehicle(flaggedObj);
@@ -139,7 +137,6 @@ export default function SearchPage() {
   };
 
   const handleMarkPending = () => {
-    setActionMarked(true);
     if (exactResult) {
       const pendingObj = { ...exactResult, status: 'PENDING' as const };
       updateVehicle(pendingObj);
@@ -158,7 +155,6 @@ export default function SearchPage() {
   };
 
   const handleMarkCleared = () => {
-    setActionMarked(true);
     if (exactResult) {
       const clearedObj = { ...exactResult, status: 'CLEARED' as const };
       updateVehicle(clearedObj);

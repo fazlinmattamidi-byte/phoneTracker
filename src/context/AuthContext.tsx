@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { Role, UserAccount } from '@/types';
 import { initialUsers } from '@/lib/mockData';
 
@@ -19,47 +19,73 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(initialUsers[0]); // Default Super Admin for easy testing
-  const [role, setRole] = useState<Role>('SUPER_ADMIN');
+interface AuthState {
+  currentUser: UserAccount | null;
+  role: Role;
+}
 
-  useEffect(() => {
-    const savedRole = localStorage.getItem('track_user_role') as Role;
-    if (savedRole) {
-      setRole(savedRole);
-      const match = initialUsers.find((u) => u.role === savedRole);
-      if (match) setCurrentUser(match);
+function isRole(value: string | null): value is Role {
+  return value === 'USER' || value === 'ADMIN' || value === 'SUPER_ADMIN';
+}
+
+function getInitialAuthState(): AuthState {
+  if (typeof window === 'undefined') {
+    return { currentUser: initialUsers[0], role: 'SUPER_ADMIN' };
+  }
+
+  const storedCurrentUser = localStorage.getItem('track_current_user');
+  if (storedCurrentUser) {
+    try {
+      const parsedUser = JSON.parse(storedCurrentUser) as UserAccount;
+      if (isRole(parsedUser.role)) {
+        return { currentUser: parsedUser, role: parsedUser.role };
+      }
+    } catch {
+      localStorage.removeItem('track_current_user');
     }
-  }, []);
+  }
+
+  const savedRole = localStorage.getItem('track_user_role');
+  const role = isRole(savedRole) ? savedRole : 'SUPER_ADMIN';
+  const matchingUser = initialUsers.find((user) => user.role === role) ?? initialUsers[0];
+  return { currentUser: matchingUser, role };
+}
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [authState, setAuthState] = useState<AuthState>(() => getInitialAuthState());
+  const { currentUser, role } = authState;
 
   const switchRole = (newRole: Role) => {
-    setRole(newRole);
     localStorage.setItem('track_user_role', newRole);
     const match = initialUsers.find((u) => u.role === newRole);
     if (match) {
-      setCurrentUser(match);
+      setAuthState({ currentUser: match, role: newRole });
     } else if (currentUser) {
-      setCurrentUser({ ...currentUser, role: newRole });
+      setAuthState({ currentUser: { ...currentUser, role: newRole }, role: newRole });
+    } else {
+      setAuthState({ currentUser: null, role: newRole });
     }
   };
 
   const loginAs = (user: UserAccount) => {
-    setCurrentUser(user);
-    setRole(user.role);
+    setAuthState({ currentUser: user, role: user.role });
     localStorage.setItem('track_user_role', user.role);
+    localStorage.setItem('track_current_user', JSON.stringify(user));
   };
 
   const updateProfile = (updatedData: Partial<UserAccount>) => {
     if (currentUser) {
       const updated = { ...currentUser, ...updatedData };
-      setCurrentUser(updated);
+      setAuthState({ currentUser: updated, role: updated.role });
       localStorage.setItem('track_current_user', JSON.stringify(updated));
+      localStorage.setItem('track_user_role', updated.role);
     }
   };
 
   const logout = () => {
-    setCurrentUser(null);
+    setAuthState({ currentUser: null, role });
     localStorage.removeItem('track_user_role');
+    localStorage.removeItem('track_current_user');
     if (typeof window !== 'undefined') {
       window.location.href = '/login';
     }

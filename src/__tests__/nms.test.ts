@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateIoU, BoundingBox, DetectedPlateBox } from '../lib/anpr/yoloDetector';
+import { calculateIoU, DetectedPlateBox } from '../lib/anpr/yoloDetector';
 
 function applyNMS(boxes: DetectedPlateBox[], iouThreshold: number): DetectedPlateBox[] {
   const sorted = [...boxes].sort((a, b) => b.confidence - a.confidence);

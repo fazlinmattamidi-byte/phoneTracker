@@ -157,7 +157,7 @@ export function detectPlateCandidatesCV(
   const nmsResult = applyNMS(candidates, 0.30);
   const mergedResult = mergeAdjacentBoxes(nmsResult);
   mergedResult.sort((a, b) => b.confidence - a.confidence);
-  return mergedResult.slice(0, 3).map((box) => ({
+  return mergedResult.slice(0, Math.max(1, maxCandidates)).map((box) => ({
     crop: box,
     confidence: box.confidence,
   }));

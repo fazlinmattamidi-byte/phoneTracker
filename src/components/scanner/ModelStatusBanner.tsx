@@ -15,8 +15,6 @@ interface ModelStatusBannerProps {
 
 export const ModelStatusBanner: React.FC<ModelStatusBannerProps> = ({
   runtimeState,
-  detectorProvider = 'WASM',
-  ocrProvider = 'WASM',
   benchmark,
   errorMessage,
   debugMode = false,
@@ -26,7 +24,6 @@ export const ModelStatusBanner: React.FC<ModelStatusBannerProps> = ({
   const isReady = runtimeState === 'READY_WEBGPU' || runtimeState === 'READY_WASM';
   const isDegraded = runtimeState === 'DEGRADED_PERFORMANCE';
   const isUnavailable = runtimeState === 'DETECTOR_UNAVAILABLE' || runtimeState === 'OCR_UNAVAILABLE' || runtimeState === 'RUNTIME_ERROR';
-  const isLoading = runtimeState === 'LOADING_MODELS' || runtimeState === 'VALIDATING_MODELS' || runtimeState === 'BENCHMARKING_DEVICE';
 
   // For normal users when ready and debugMode is false, keep UI 100% clean and transparent
   if (isReady && !debugMode) {

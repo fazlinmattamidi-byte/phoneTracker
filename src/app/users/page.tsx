@@ -7,7 +7,6 @@ import { useAuth } from '@/context/AuthContext';
 import { formatDate } from '@/lib/utils';
 import { UserAccount, Role } from '@/types';
 import {
-  Users,
   UserPlus,
   ShieldCheck,
   UserCheck,
@@ -18,7 +17,6 @@ import {
   Eye,
   Edit2,
   Trash2,
-  AlertTriangle,
 } from 'lucide-react';
 
 export default function UsersPage() {
@@ -519,7 +517,7 @@ export default function UsersPage() {
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Status</label>
                   <select
                     value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value as UserAccount['status'] })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
                   >
                     <option value="ACTIVE">ACTIVE</option>

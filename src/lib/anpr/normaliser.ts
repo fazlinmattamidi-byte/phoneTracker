@@ -1,4 +1,4 @@
-import { CharacterConfidence, PlateCategory, PlateLayout } from '../db/types';
+import { CharacterConfidence, PlateCategory } from '../db/types';
 
 /**
  * Normalises a raw plate string according to Malaysian ANPR rules:
@@ -23,7 +23,8 @@ export function normalizePlate(raw: string): string {
  * "EV1234"  -> "EV 1234"
  * "W1234A"  -> "W 1234 A"
  */
-export function formatDisplayPlate(normalized: string, category?: PlateCategory): string {
+export function formatDisplayPlate(normalized: string, _category?: PlateCategory): string {
+  void _category;
   if (!normalized) return '';
 
   // EV Special

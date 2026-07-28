@@ -8,6 +8,8 @@ import {
   HistoryLog,
   SystemSettings,
   ThemeMode,
+  VehiclePriority,
+  VehicleStatus,
 } from '@/types';
 import {
   initialVehicles,
@@ -47,87 +49,110 @@ const StorageContext = createContext<StorageContextType | undefined>(undefined);
 
 type StoredSystemSettings = Partial<SystemSettings> & { debugMode?: unknown };
 
+function readJsonStorage<T>(key: string, fallback: T, merge?: (stored: T) => T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const stored = localStorage.getItem(key);
+    if (!stored) return fallback;
+    const parsed = JSON.parse(stored) as T;
+    return merge ? merge(parsed) : parsed;
+  } catch (error) {
+    console.error(`Error restoring ${key} from LocalStorage:`, error);
+    return fallback;
+  }
+}
+
+function readThemeStorage(): ThemeMode {
+  if (typeof window === 'undefined') return 'dark';
+  const storedTheme = localStorage.getItem('track_theme') as ThemeMode | null;
+  return storedTheme === 'dark' || storedTheme === 'light' || storedTheme === 'system' ? storedTheme : 'dark';
+}
+
+function mergeStoredUsers(storedUsers: UserAccount[]): UserAccount[] {
+  const migratedUsers = storedUsers.map((user) => ({
+    ...user,
+    createdBy:
+      user.createdBy ||
+      (user.id === 'user-002'
+        ? 'user-001'
+        : user.id === 'user-003'
+        ? 'user-002'
+        : user.role === 'SUPER_ADMIN'
+        ? 'system'
+        : undefined),
+  }));
+  return [
+    ...migratedUsers,
+    ...initialUsers.filter((seedUser) => !migratedUsers.some((storedUser) => storedUser.id === seedUser.id)),
+  ];
+}
+
+function mergeStoredHistory(storedHistory: HistoryLog[]): HistoryLog[] {
+  return [
+    ...storedHistory,
+    ...initialHistory.filter((seedLog) => !storedHistory.some((storedLog) => storedLog.id === seedLog.id)),
+  ];
+}
+
 function sanitizeSystemSettings(rawSettings: StoredSystemSettings): SystemSettings {
   const cleanedSettings: StoredSystemSettings = { ...rawSettings };
   delete cleanedSettings.debugMode;
   return { ...defaultSettings, ...cleanedSettings };
 }
 
+function applyTheme(mode: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const prefersDark =
+    typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if (mode === 'dark' || (mode === 'system' && prefersDark)) {
+    root.classList.add('dark');
+    root.classList.remove('light');
+  } else {
+    root.classList.remove('dark');
+    root.classList.add('light');
+  }
+}
+
+function createLocalId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
+function createTimestampedCsvName(prefix: string): string {
+  return `${prefix}_${Date.now()}.csv`;
+}
+
+function parseVehiclePriority(value: string | undefined): VehiclePriority {
+  return value === 'HIGH' || value === 'MEDIUM' || value === 'LOW' ? value : 'HIGH';
+}
+
+function parseVehicleStatus(value: string | undefined): VehicleStatus {
+  return value === 'ACTIVE' || value === 'FLAGGED' || value === 'PENDING' || value === 'CLEARED'
+    ? value
+    : 'ACTIVE';
+}
+
 export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
-  const [users, setUsers] = useState<UserAccount[]>(initialUsers);
-  const [cameras, setCameras] = useState<CameraDevice[]>(initialCameras);
-  const [history, setHistory] = useState<HistoryLog[]>(initialHistory);
-  const [settings, setSettings] = useState<SystemSettings>(defaultSettings);
-  const [theme, setThemeState] = useState<ThemeMode>('dark');
+  const [vehicles, setVehicles] = useState<Vehicle[]>(() =>
+    readJsonStorage('track_vehicles', initialVehicles)
+  );
+  const [users, setUsers] = useState<UserAccount[]>(() =>
+    readJsonStorage('track_users', initialUsers, mergeStoredUsers)
+  );
+  const [cameras, setCameras] = useState<CameraDevice[]>(() =>
+    readJsonStorage('track_cameras', initialCameras)
+  );
+  const [history, setHistory] = useState<HistoryLog[]>(() =>
+    readJsonStorage('track_history', initialHistory, mergeStoredHistory)
+  );
+  const [settings, setSettings] = useState<SystemSettings>(() =>
+    readJsonStorage('track_settings', defaultSettings, sanitizeSystemSettings)
+  );
+  const [theme, setThemeState] = useState<ThemeMode>(() => readThemeStorage());
 
-  // Load from LocalStorage on mount
   useEffect(() => {
-    try {
-      const storedVehicles = localStorage.getItem('track_vehicles');
-      if (storedVehicles) setVehicles(JSON.parse(storedVehicles));
-
-      const storedUsers = localStorage.getItem('track_users');
-      if (storedUsers) {
-        const parsedUsers = JSON.parse(storedUsers) as UserAccount[];
-        const migratedUsers = parsedUsers.map((user) => ({
-            ...user,
-            createdBy:
-              user.createdBy ||
-              (user.id === 'user-002'
-                ? 'user-001'
-                : user.id === 'user-003'
-                ? 'user-002'
-                : user.role === 'SUPER_ADMIN'
-                ? 'system'
-                : undefined),
-          }));
-        const mergedUsers = [
-          ...migratedUsers,
-          ...initialUsers.filter((seedUser) => !migratedUsers.some((storedUser) => storedUser.id === seedUser.id)),
-        ];
-        setUsers(mergedUsers);
-      }
-
-      const storedCameras = localStorage.getItem('track_cameras');
-      if (storedCameras) setCameras(JSON.parse(storedCameras));
-
-      const storedHistory = localStorage.getItem('track_history');
-      if (storedHistory) {
-        const parsedHistory = JSON.parse(storedHistory) as HistoryLog[];
-        setHistory([
-          ...parsedHistory,
-          ...initialHistory.filter((seedLog) => !parsedHistory.some((storedLog) => storedLog.id === seedLog.id)),
-        ]);
-      }
-
-      const storedSettings = localStorage.getItem('track_settings');
-      if (storedSettings) setSettings(sanitizeSystemSettings(JSON.parse(storedSettings) as StoredSystemSettings));
-
-      const storedTheme = localStorage.getItem('track_theme') as ThemeMode;
-      if (storedTheme) {
-        setThemeState(storedTheme);
-        applyTheme(storedTheme);
-      } else {
-        applyTheme('dark');
-      }
-    } catch (e) {
-      console.error('Error restoring state from LocalStorage:', e);
-    }
-  }, []);
-
-  const applyTheme = (mode: ThemeMode) => {
-    if (typeof document !== 'undefined') {
-      const root = document.documentElement;
-      if (mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        root.classList.add('dark');
-        root.classList.remove('light');
-      } else {
-        root.classList.remove('dark');
-        root.classList.add('light');
-      }
-    }
-  };
+    applyTheme(theme);
+  }, [theme]);
 
   const setTheme = (mode: ThemeMode) => {
     setThemeState(mode);
@@ -161,7 +186,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const now = new Date().toISOString();
     const newVehicle: Vehicle = {
       ...vData,
-      id: `veh-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      id: createLocalId('veh'),
       plate: cleanPlateNumber(vData.plate),
       createdDate: now,
       updatedDate: now,
@@ -249,8 +274,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             financeCompany: parts[8] || 'Maybank',
             outstandingAmount: parseFloat(parts[9]) || 10000,
             reference: parts[10] || `IMP-REF-${idx}`,
-            priority: (parts[11] as any) || 'HIGH',
-            status: (parts[12] as any) || 'ACTIVE',
+            priority: parseVehiclePriority(parts[11]),
+            status: parseVehicleStatus(parts[12]),
             remark: parts[13] || 'Imported via CSV',
             createdDate: now,
             updatedDate: now,
@@ -281,14 +306,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           `"${v.plate}","${v.customerName}","${v.customerId}","${v.phone}","${v.brand}","${v.model}","${v.colour}",${v.year},"${v.financeCompany}",${v.outstandingAmount},"${v.reference}","${v.priority}","${v.status}","${v.remark}","${v.createdDate}"`
       )
       .join('\n');
-    downloadCSV(`track_vehicles_${Date.now()}.csv`, headers + rows);
+    downloadCSV(createTimestampedCsvName('track_vehicles'), headers + rows);
   };
 
   // User CRUD
   const addUser = (uData: Omit<UserAccount, 'id' | 'lastLogin'>): UserAccount => {
     const newUser: UserAccount = {
       ...uData,
-      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      id: createLocalId('user'),
       lastLogin: new Date().toISOString(),
     };
     const updated = [newUser, ...users];
@@ -346,7 +371,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const addHistoryLog = (logData: Omit<HistoryLog, 'id' | 'timestamp'>) => {
     const newLog: HistoryLog = {
       ...logData,
-      id: `hist-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: createLocalId('hist'),
       timestamp: new Date().toISOString(),
     };
     const updated = [newLog, ...history];
@@ -367,7 +392,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           )}","${h.statusMatch || ''}"`
       )
       .join('\n');
-    downloadCSV(`track_audit_history_${Date.now()}.csv`, headers + rows);
+    downloadCSV(createTimestampedCsvName('track_audit_history'), headers + rows);
   };
 
   // Settings

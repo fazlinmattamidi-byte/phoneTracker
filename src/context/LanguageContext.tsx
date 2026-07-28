@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { Language } from '@/types';
 import { dictionary } from '@/lib/dictionary';
 
@@ -12,15 +12,14 @@ interface LanguageContextType {
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
-export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [language, setLanguageState] = useState<Language>('BM');
+function readStoredLanguage(): Language {
+  if (typeof window === 'undefined') return 'BM';
+  const saved = localStorage.getItem('track_language');
+  return saved === 'BM' || saved === 'EN' ? saved : 'BM';
+}
 
-  useEffect(() => {
-    const saved = localStorage.getItem('track_language') as Language;
-    if (saved && (saved === 'BM' || saved === 'EN')) {
-      setLanguageState(saved);
-    }
-  }, []);
+export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [language, setLanguageState] = useState<Language>(() => readStoredLanguage());
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);

@@ -7,7 +7,6 @@ import { useAuth } from '@/context/AuthContext';
 import { formatMYR, cleanPlateNumber, downloadCSV } from '@/lib/utils';
 import { Vehicle, VehiclePriority, VehicleStatus } from '@/types';
 import {
-  Car,
   Plus,
   Search,
   Upload,
@@ -668,7 +667,7 @@ export default function VehiclesPage() {
                   </label>
                   <select
                     value={statusInput}
-                    onChange={(e) => setStatusInput(e.target.value as any)}
+                    onChange={(e) => setStatusInput(e.target.value as VehicleStatus)}
                     className="w-full h-10 bg-slate-950 border border-slate-800 rounded-xl px-3.5 text-xs text-white focus:outline-none cursor-pointer"
                   >
                     <option value="ACTIVE">{t('statusActive')}</option>
@@ -687,7 +686,7 @@ export default function VehiclesPage() {
                   </label>
                   <select
                     value={priorityInput}
-                    onChange={(e) => setPriorityInput(e.target.value as any)}
+                    onChange={(e) => setPriorityInput(e.target.value as VehiclePriority)}
                     className="w-full h-10 bg-slate-950 border border-slate-800 rounded-xl px-3.5 text-xs text-white focus:outline-none cursor-pointer"
                   >
                     <option value="HIGH">{t('priorityHigh')}</option>

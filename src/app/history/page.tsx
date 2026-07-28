@@ -5,20 +5,22 @@ import { useStorage } from '@/context/StorageContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { downloadCSV, formatDate } from '@/lib/utils';
 import {
-  History,
   Download,
   Search,
-  Camera,
-  Car,
-  Users,
-  Filter,
   ChevronLeft,
   ChevronRight,
   SlidersHorizontal,
   ArrowUpDown,
-  Calendar,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+
+type HistoryFilterType = 'ALL' | 'SEARCH' | 'DETECTION' | 'VEHICLE' | 'USER';
+type MatchStatusFilter = 'ALL' | 'EXACT' | 'POSSIBLE' | 'NONE';
+type HistorySortOrder = 'NEWEST' | 'OLDEST' | 'PLATE_AZ';
+
+function createHistoryExportFileName(role: string): string {
+  return `track_audit_history_${role.toLowerCase()}_${Date.now()}.csv`;
+}
 
 export default function HistoryPage() {
   const { history, users } = useStorage();
@@ -42,9 +44,9 @@ export default function HistoryPage() {
 
   // Filter States
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
-  const [filterType, setFilterType] = useState<'ALL' | 'SEARCH' | 'DETECTION' | 'VEHICLE' | 'USER'>('ALL');
-  const [statusMatchFilter, setStatusMatchFilter] = useState<'ALL' | 'EXACT' | 'POSSIBLE' | 'NONE'>('ALL');
-  const [sortOrder, setSortOrder] = useState<'NEWEST' | 'OLDEST' | 'PLATE_AZ'>('NEWEST');
+  const [filterType, setFilterType] = useState<HistoryFilterType>('ALL');
+  const [statusMatchFilter, setStatusMatchFilter] = useState<MatchStatusFilter>('ALL');
+  const [sortOrder, setSortOrder] = useState<HistorySortOrder>('NEWEST');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Pagination State
@@ -93,7 +95,7 @@ export default function HistoryPage() {
           )}","${h.statusMatch || ''}"`
       )
       .join('\n');
-    downloadCSV(`track_audit_history_${role.toLowerCase()}_${Date.now()}.csv`, headers + rows);
+    downloadCSV(createHistoryExportFileName(role), headers + rows);
   };
 
   return (
@@ -158,16 +160,16 @@ export default function HistoryPage() {
                 {t('matchStatusHeader')}
               </span>
               <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                {[
+                {([
                   { id: 'ALL', label: language === 'BM' ? 'SEMUA' : 'ALL' },
                   { id: 'EXACT', label: language === 'BM' ? 'PADANAN KES' : 'EXACT MATCH' },
                   { id: 'POSSIBLE', label: language === 'BM' ? 'BERPOTENSI' : 'POSSIBLE' },
                   { id: 'NONE', label: language === 'BM' ? 'TIADA' : 'UNMATCHED' },
-                ].map((s) => (
+                ] satisfies Array<{ id: MatchStatusFilter; label: string }>).map((s) => (
                   <button
                     key={s.id}
                     onClick={() => {
-                      setStatusMatchFilter(s.id as any);
+                      setStatusMatchFilter(s.id);
                       setCurrentPage(1);
                     }}
                     className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold uppercase transition-all ${
@@ -191,14 +193,14 @@ export default function HistoryPage() {
                   <span>{t('sortByHeader')}</span>
                 </span>
                 <div className="flex items-center gap-1.5">
-                  {[
+                  {([
                     { id: 'NEWEST', label: t('sortNewest') },
                     { id: 'OLDEST', label: t('sortOldest') },
                     { id: 'PLATE_AZ', label: t('sortPlateAZ') },
-                  ].map((so) => (
+                  ] satisfies Array<{ id: HistorySortOrder; label: string }>).map((so) => (
                     <button
                       key={so.id}
-                      onClick={() => setSortOrder(so.id as any)}
+                      onClick={() => setSortOrder(so.id)}
                       className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
                         sortOrder === so.id
                           ? 'bg-cyan-950 text-cyan-300 border-cyan-500/60'
@@ -217,16 +219,16 @@ export default function HistoryPage() {
                   {language === 'BM' ? 'KATEGORI LOG:' : 'LOG CATEGORY:'}
                 </span>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {[
+                  {([
                     { id: 'ALL', label: t('filterAll') },
                     { id: 'SEARCH', label: t('filterSearch') },
                     { id: 'DETECTION', label: t('filterDetection') },
                     { id: 'VEHICLE', label: t('filterVehicle') },
-                  ].map((cat) => (
+                  ] satisfies Array<{ id: HistoryFilterType; label: string }>).map((cat) => (
                     <button
                       key={cat.id}
                       onClick={() => {
-                        setFilterType(cat.id as any);
+                        setFilterType(cat.id);
                         setCurrentPage(1);
                       }}
                       className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${

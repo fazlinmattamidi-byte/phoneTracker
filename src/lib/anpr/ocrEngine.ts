@@ -2,7 +2,7 @@ import { createWorker, Worker } from 'tesseract.js';
 import { normalizePlate, formatDisplayPlate, generateCandidatePlates } from './normaliser';
 import { validateMalaysianPattern } from './patterns';
 import { CharacterConfidence, PlateCategory, PlateLayout } from '../db/types';
-import { recognizeWithPpOcr, isPpOcrReady } from './ppOcrEngine';
+import { recognizeWithPpOcr } from './ppOcrEngine';
 
 let workerPromise: Promise<Worker> | null = null;
 
@@ -66,7 +66,7 @@ export async function recognizePlateFromCanvas(
 /**
  * Tesseract.js OCR engine execution (Fallback only)
  */
-async function recognizeWithTesseract(
+export async function recognizeWithTesseract(
   cropCanvas: HTMLCanvasElement,
   isTwoLineHint?: boolean
 ): Promise<OcrRecognitionResult> {

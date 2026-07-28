@@ -22,6 +22,13 @@ export interface CsvValidationResult {
   duplicateRows: Array<{ rowNumber: number; plateNumber: string; reason: string }>;
 }
 
+type CsvImportRecord = CsvImportRow & Record<string, string | number | undefined>;
+
+function getCsvValue(row: CsvImportRecord, primaryKey: keyof CsvImportRow, fallbackKey?: string): string {
+  const value = row[primaryKey] ?? (fallbackKey ? row[fallbackKey] : undefined) ?? '';
+  return String(value);
+}
+
 export function parseAndValidateVehiclesCsv(
   csvContent: string,
   existingNormalizedPlates: Set<string>
@@ -39,8 +46,9 @@ export function parseAndValidateVehiclesCsv(
 
   parsed.data.forEach((row, index) => {
     const rowNum = index + 2; // header is row 1
+    const rowRecord = row as CsvImportRecord;
 
-    const rawPlate = row.plateNumber || (row as any)['Nombor Plat'] || '';
+    const rawPlate = getCsvValue(rowRecord, 'plateNumber', 'Nombor Plat');
     const normalized = normalizePlate(rawPlate);
 
     if (!normalized) {
@@ -70,15 +78,15 @@ export function parseAndValidateVehiclesCsv(
       return;
     }
 
-    const customerName = (row.customerName || (row as any)['Nama Pelanggan'] || 'N/A').trim();
-    const vehicleMake = (row.vehicleMake || (row as any)['Jenama'] || 'Unknown').trim();
-    const vehicleModel = (row.vehicleModel || (row as any)['Model'] || 'Unknown').trim();
-    const vehicleColor = (row.vehicleColor || (row as any)['Warna'] || 'Unknown').trim();
-    const financeCompany = (row.financeCompany || (row as any)['Syarikat Kewangan'] || 'N/A').trim();
-    const caseReference = (row.caseReference || (row as any)['Rujukan Kes'] || `REF-${Date.now()}`).trim();
-    const notes = (row.notes || (row as any)['Nota'] || '').trim();
+    const customerName = getCsvValue(rowRecord, 'customerName', 'Nama Pelanggan').trim() || 'N/A';
+    const vehicleMake = getCsvValue(rowRecord, 'vehicleMake', 'Jenama').trim() || 'Unknown';
+    const vehicleModel = getCsvValue(rowRecord, 'vehicleModel', 'Model').trim() || 'Unknown';
+    const vehicleColor = getCsvValue(rowRecord, 'vehicleColor', 'Warna').trim() || 'Unknown';
+    const financeCompany = getCsvValue(rowRecord, 'financeCompany', 'Syarikat Kewangan').trim() || 'N/A';
+    const caseReference = getCsvValue(rowRecord, 'caseReference', 'Rujukan Kes').trim() || `REF-${Date.now()}`;
+    const notes = getCsvValue(rowRecord, 'notes', 'Nota').trim();
 
-    const rawAmount = row.outstandingAmount || (row as any)['Jumlah Tunggakan'] || '0';
+    const rawAmount = getCsvValue(rowRecord, 'outstandingAmount', 'Jumlah Tunggakan') || '0';
     const amountNum = parseFloat(String(rawAmount).replace(/[^0-9.]/g, ''));
 
     if (isNaN(amountNum) || amountNum < 0) {

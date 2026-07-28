@@ -1,5 +1,5 @@
 // Track PWA Service Worker (Self-Destruct / Purge Mode for Dev)
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -12,7 +12,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('fetch', () => {
   // Do NOT intercept any fetch requests
   return;
 });

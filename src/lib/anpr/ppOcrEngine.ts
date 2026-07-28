@@ -185,7 +185,7 @@ export async function runBenchmarkOcr(): Promise<boolean> {
       (t as any)?.dispose?.();
     }
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 }

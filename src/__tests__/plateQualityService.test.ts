@@ -17,10 +17,16 @@ type FakeCanvas = HTMLCanvasElement & {
   __data: Uint8ClampedArray;
 };
 
+type TestGlobal = typeof globalThis & {
+  window?: unknown;
+  document?: unknown;
+};
+
 afterEach(() => {
   vi.restoreAllMocks();
-  delete (globalThis as any).window;
-  delete (globalThis as any).document;
+  const testGlobal = globalThis as TestGlobal;
+  delete testGlobal.window;
+  delete testGlobal.document;
 });
 
 describe('PlateQualityService', () => {
@@ -142,7 +148,7 @@ describe('PlateQualityService', () => {
   });
 
   it('falls back clearly when the quality ONNX model is missing', async () => {
-    (globalThis as any).window = {};
+    (globalThis as TestGlobal).window = {};
     const service = new PlateQualityService({
       fetchFn: vi.fn(async () => ({ ok: false, status: 404 } as Response)),
     });
@@ -154,7 +160,7 @@ describe('PlateQualityService', () => {
   });
 
   it('falls back from WebGPU to WASM and disposes warmup tensors', async () => {
-    (globalThis as any).window = {};
+    (globalThis as TestGlobal).window = {};
     let tensorDisposed = 0;
     let outputDisposed = 0;
     const createCalls: string[][] = [];
@@ -199,7 +205,7 @@ describe('PlateQualityService', () => {
     });
     const service = new PlateQualityService({
       fetchFn,
-      getOrtFn: async () => fakeOrt as any,
+      getOrtFn: async () => fakeOrt as never,
       canUseWebGpuFn: () => true,
     });
 
@@ -216,7 +222,7 @@ describe('PlateQualityService', () => {
     expect(schema.task).toBe('plate-quality-assessment');
     expect(schema.classes).toContain('GOOD');
     expect(schema.classes).toContain('BAD_ANGLE');
-    expect(schema.classes).not.toContain('RAIN' as any);
+    expect(schema.classes).not.toContain('RAIN');
     expect(schema.modelPath).toBe('public/models/plate-quality-classifier.onnx');
   });
 });

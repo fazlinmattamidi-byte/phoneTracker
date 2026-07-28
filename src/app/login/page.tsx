@@ -7,7 +7,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import { useStorage } from '@/context/StorageContext';
 import { Role } from '@/types';
 import Image from 'next/image';
-import { ShieldAlert, ShieldCheck, UserCheck, User as UserIcon, ArrowRight, Lock, Mail } from 'lucide-react';
+import { ShieldCheck, UserCheck, User as UserIcon, ArrowRight, Lock, Mail } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();

@@ -175,7 +175,7 @@ export async function validateDetector(): Promise<{ valid: boolean; provider?: A
   try {
     if (!localOnnxSession.inputNames || !localOnnxSession.outputNames) return { valid: false };
     return { valid: true, provider: activeProvider };
-  } catch (err) {
+  } catch {
     return { valid: false };
   }
 }
@@ -248,7 +248,7 @@ export async function runBenchmarkDetection(): Promise<boolean> {
       (t as any)?.dispose?.();
     }
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 }
