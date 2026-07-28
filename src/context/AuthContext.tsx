@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Role, UserAccount } from '@/types';
 import { initialUsers } from '@/lib/mockData';
+import { getRolePermissions } from '@/lib/permissions';
 
 interface AuthContextType {
   currentUser: UserAccount | null;
@@ -99,11 +100,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Permission guards
-  const canEdit = role === 'ADMIN' || role === 'SUPER_ADMIN';
-  const canManageUsers = role === 'ADMIN' || role === 'SUPER_ADMIN';
-  const canManageVehicles = role === 'ADMIN' || role === 'SUPER_ADMIN';
-  const canManageSystem = role === 'SUPER_ADMIN';
+  const { canEdit, canManageUsers, canManageVehicles, canManageSystem } = getRolePermissions(role);
 
   return (
     <AuthContext.Provider

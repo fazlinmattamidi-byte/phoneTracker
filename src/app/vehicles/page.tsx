@@ -108,8 +108,10 @@ const FINANCE_OPTIONS = [
 export default function VehiclesPage() {
   const { vehicles, addVehicle, updateVehicle, deleteVehicle, importVehiclesCSV, exportVehiclesCSV } = useStorage();
   const { t } = useLanguage();
-  const { role, canEdit, canManageSystem } = useAuth();
-  const canAddVehicle = role === 'USER' || canManageSystem;
+  const { canManageVehicles, canManageSystem } = useAuth();
+  const canModifyVehicles = canManageVehicles;
+  const canAddVehicle = canModifyVehicles;
+  const showActionColumn = canModifyVehicles;
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -177,6 +179,7 @@ export default function VehiclesPage() {
   };
 
   const openEditModal = (v: Vehicle) => {
+    if (!canModifyVehicles) return;
     setEditingVehicle(v);
     setPlateInput(v.plate);
     setCustomerNameInput(v.customerName);
@@ -231,6 +234,7 @@ export default function VehiclesPage() {
 
   const handleSaveForm = (e: React.FormEvent) => {
     e.preventDefault();
+    if ((editingVehicle && !canModifyVehicles) || (!editingVehicle && !canAddVehicle)) return;
     if (!plateInput.trim() || !customerNameInput.trim()) return;
 
     const finalBrand = selectedBrand === 'Other' ? customBrand || 'Custom Brand' : selectedBrand;
@@ -267,6 +271,7 @@ export default function VehiclesPage() {
   };
 
   const handleDeleteConfirm = () => {
+    if (!canModifyVehicles) return;
     if (deletingVehicleId) {
       deleteVehicle(deletingVehicleId);
       setDeletingVehicleId(null);
@@ -446,7 +451,7 @@ export default function VehiclesPage() {
                   <span className="font-mono font-bold text-slate-200">{formatMYR(v.outstandingAmount)}</span>
                 </div>
 
-                {canEdit && (
+                {canModifyVehicles && (
                   <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/40">
                     <button
                       onClick={() => openEditModal(v)}
@@ -473,7 +478,7 @@ export default function VehiclesPage() {
 
         {/* Desktop View: Table */}
         <div className="hidden sm:block overflow-x-auto">
-          <table className="w-full text-left text-xs min-w-[800px]">
+          <table className={`w-full text-left text-xs ${showActionColumn ? 'min-w-[800px]' : 'min-w-[680px]'}`}>
             <thead className="bg-slate-950/90 text-slate-400 uppercase font-mono text-[10px] border-b border-slate-800 whitespace-nowrap">
               <tr>
                 <th className="py-3.5 px-4">{t('plateNumber')}</th>
@@ -482,7 +487,7 @@ export default function VehiclesPage() {
                 <th className="py-3.5 px-4">{t('outstandingHeader')}</th>
                 <th className="py-3.5 px-4 text-center">{t('priorityHeader')}</th>
                 <th className="py-3.5 px-4 text-center">{t('statusCase')}</th>
-                <th className="py-3.5 px-4 text-right">{t('actionsHeader')}</th>
+                {showActionColumn && <th className="py-3.5 px-4 text-right">{t('actionsHeader')}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 whitespace-nowrap">
@@ -542,8 +547,8 @@ export default function VehiclesPage() {
                           : t('statusCleared')}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-right">
-                      {canEdit ? (
+                    {showActionColumn && (
+                      <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             onClick={() => openEditModal(v)}
@@ -560,15 +565,13 @@ export default function VehiclesPage() {
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                      ) : (
-                        <span className="text-[10px] text-slate-600 italic">Read-only</span>
-                      )}
-                    </td>
+                      </td>
+                    )}
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-500">
+                  <td colSpan={showActionColumn ? 7 : 6} className="py-8 text-center text-slate-500">
                     No vehicles found matching search criteria.
                   </td>
                 </tr>
