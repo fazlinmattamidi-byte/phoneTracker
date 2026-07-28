@@ -41,6 +41,7 @@ import {
   cropCanvasRegionFast,
   prioritiseTracks,
   releaseCanvasMemory,
+  scaleBoundingBox,
 } from '@/lib/anpr/imageProcessor';
 import { BestFrameSelector } from '@/lib/anpr/bestFrameSelector';
 import { recognizePlateFromCanvas } from '@/lib/anpr/ocrEngine';
@@ -80,8 +81,12 @@ import {
 } from '@/lib/anpr/environmentIntelligence';
 import {
   classifyPlateQuality,
+  createPlateQualityDatasetSchema,
+  getPlateQualityBackend,
+  getPlateQualityEngineLabel,
   getPlateQualityModelStatus,
   PlateQualityAssessment,
+  recoverCorrectablePlateCrop,
 } from '@/lib/anpr/plateQualityModel';
 import {
   CameraHealthSnapshot,
@@ -182,9 +187,21 @@ type ScannerRuntimeMetrics = {
   currentEnvironmentSource: EnvironmentProfile['source'];
   currentQuality: PlateQualityClass;
   currentQualityConfidence: number;
-  currentQualitySource: PlateQualityAssessment['source'];
+  currentQualityBackend: PlateQualityAssessment['backend'];
   environmentDistribution: Record<EnvironmentClass, number>;
   qualityDistribution: Record<PlateQualityClass, number>;
+  qualityLatencyTotalMs: number;
+  qualityLatencySamples: number;
+  qualityLatencyHistoryMs: number[];
+  qualityAcceptedCropCount: number;
+  qualityRejectedCropCount: number;
+  qualityOcrAvoidedCount: number;
+  qualityCorrectableRecoveredCount: number;
+  bestFrameReplacementCount: number;
+  tracksWaitingForBetterCrop: number;
+  heuristicQualityUsageCount: number;
+  onnxQualityUsageCount: number;
+  qualityRejectionReasons: Record<string, number>;
   environmentStats: Record<
     EnvironmentClass,
     {
@@ -211,6 +228,8 @@ type ScannerMetricsSnapshot = ScannerRuntimeMetrics & {
   ocrLatencyP95Ms: number;
   trackLifetimeAvgMs: number;
   cropQualityAvg: number;
+  qualityLatencyAvgMs: number;
+  qualityLatencyP95Ms: number;
   trackLossRate: number;
   duplicateOcrRate: number;
   averageTrackConfidence: number;
@@ -253,6 +272,10 @@ type DatasetSample = {
   environmentConfidence: number;
   qualityClass: PlateQualityClass;
   qualityConfidence: number;
+  qualityScore: number;
+  qualityBackend: PlateQualityAssessment['backend'];
+  qualityRejectionReasons: string[];
+  selectedPreprocessing: string[];
   ocrResult: string;
   ocrConfidence: number;
   detectorConfidence: number;
@@ -463,11 +486,23 @@ function createInitialRuntimeMetrics(deviceTier: DeviceTier = 'B'): ScannerRunti
     currentEnvironment: initialEnvironment.label,
     currentEnvironmentConfidence: initialEnvironment.confidence,
     currentEnvironmentSource: initialEnvironment.source,
-    currentQuality: 'READABLE',
+    currentQuality: 'GOOD',
     currentQualityConfidence: 0,
-    currentQualitySource: 'HEURISTIC',
+    currentQualityBackend: 'heuristic',
     environmentDistribution: createEmptyDistribution(ENVIRONMENT_CLASSES),
     qualityDistribution: createEmptyDistribution(PLATE_QUALITY_CLASSES),
+    qualityLatencyTotalMs: 0,
+    qualityLatencySamples: 0,
+    qualityLatencyHistoryMs: [],
+    qualityAcceptedCropCount: 0,
+    qualityRejectedCropCount: 0,
+    qualityOcrAvoidedCount: 0,
+    qualityCorrectableRecoveredCount: 0,
+    bestFrameReplacementCount: 0,
+    tracksWaitingForBetterCrop: 0,
+    heuristicQualityUsageCount: 0,
+    onnxQualityUsageCount: 0,
+    qualityRejectionReasons: {},
     environmentStats: createEnvironmentStats(),
     cameraHealth: createInitialCameraHealth(),
     memoryBaselineMb,
@@ -508,6 +543,9 @@ function createMetricsSnapshot(
       metrics.completedTrackCount > 0 ? metrics.trackLifetimeTotalMs / metrics.completedTrackCount : 0,
     cropQualityAvg:
       metrics.cropQualitySamples > 0 ? metrics.cropQualityTotal / metrics.cropQualitySamples : 0,
+    qualityLatencyAvgMs:
+      metrics.qualityLatencySamples > 0 ? metrics.qualityLatencyTotalMs / metrics.qualityLatencySamples : 0,
+    qualityLatencyP95Ms: getPercentile(metrics.qualityLatencyHistoryMs, 95),
     trackLossRate:
       lostAndVisible > 0 ? metrics.lostTrackObservations / lostAndVisible : 0,
     duplicateOcrRate,
@@ -849,6 +887,56 @@ function addEnvironmentOcrSample(
   stats.ocrLatencySamples++;
   stats.cropQualityTotal += cropQuality;
   stats.cropQualitySamples++;
+}
+
+function addQualityAssessmentSample(metrics: ScannerRuntimeMetrics, assessment: PlateQualityAssessment): void {
+  metrics.currentQuality = assessment.primaryClass;
+  metrics.currentQualityConfidence = assessment.confidence;
+  metrics.currentQualityBackend = assessment.backend;
+  metrics.qualityDistribution = incrementDistribution(metrics.qualityDistribution, assessment.primaryClass);
+  metrics.qualityLatencyTotalMs += assessment.latencyMs;
+  metrics.qualityLatencySamples++;
+  pushBoundedMetricSample(metrics.qualityLatencyHistoryMs, assessment.latencyMs);
+
+  if (assessment.backend === 'heuristic') {
+    metrics.heuristicQualityUsageCount++;
+  } else {
+    metrics.onnxQualityUsageCount++;
+  }
+
+  if (assessment.acceptableForOCR) {
+    metrics.qualityAcceptedCropCount++;
+  } else {
+    metrics.qualityRejectedCropCount++;
+    assessment.rejectionReasons.forEach((reason) => {
+      metrics.qualityRejectionReasons[reason] = (metrics.qualityRejectionReasons[reason] ?? 0) + 1;
+    });
+  }
+}
+
+function attachQualityAssessmentToTrack(
+  track: ActiveTrack,
+  assessment: PlateQualityAssessment,
+  submittedToOcr: boolean
+): void {
+  track.qualityClass = assessment.primaryClass;
+  track.qualityConfidence = assessment.confidence;
+  track.qualityScore = assessment.qualityScore;
+  track.qualityBackend = assessment.backend;
+  track.qualityAcceptedForOcr = assessment.acceptableForOCR;
+  track.qualityRejectionReasons = assessment.rejectionReasons;
+  track.qualityCropSize = {
+    width: assessment.measurements.cropWidth,
+    height: assessment.measurements.cropHeight,
+  };
+  track.qualitySharpness = assessment.measurements.sharpnessScore;
+  track.qualitySelectedPreprocessing = assessment.selectedPreprocessing;
+  track.qualitySubmittedToOcr = submittedToOcr;
+
+  if (track.stats) {
+    track.stats.bestCropQuality = Math.max(track.stats.bestCropQuality ?? 0, assessment.qualityScore);
+    track.stats.lastQualityLatencyMs = Math.round(assessment.latencyMs);
+  }
 }
 
 function serializeDistributionPercentages<T extends string>(distribution: Record<T, number>): Record<T, number> {
@@ -2186,6 +2274,10 @@ export default function ScannerPage() {
       environmentConfidence: number;
       qualityClass: PlateQualityClass;
       qualityConfidence: number;
+      qualityScore: number;
+      qualityBackend: PlateQualityAssessment['backend'];
+      qualityRejectionReasons: string[];
+      selectedPreprocessing: string[];
       ocrResult: string;
       ocrConfidence: number;
       detectorConfidence: number;
@@ -2206,6 +2298,10 @@ export default function ScannerPage() {
         environmentConfidence: args.environmentConfidence,
         qualityClass: args.qualityClass,
         qualityConfidence: args.qualityConfidence,
+        qualityScore: args.qualityScore,
+        qualityBackend: args.qualityBackend,
+        qualityRejectionReasons: args.qualityRejectionReasons,
+        selectedPreprocessing: args.selectedPreprocessing,
         ocrResult: args.ocrResult,
         ocrConfidence: args.ocrConfidence,
         detectorConfidence: args.detectorConfidence,
@@ -2413,8 +2509,22 @@ export default function ScannerPage() {
           }
 
           track.pipelineState = 'COLLECTING';
-          const cropCanvas = cropCanvasRegionFast(processingCanvas, track.bbox);
-          const cropQuality = runtime.bestFrameSelector.addCropCandidate(track.trackNumber, cropCanvas, track.bbox);
+          const previousBestId = existingCrop?.id;
+          const sourceScaleX = video.videoWidth / Math.max(1, processingCanvas.width);
+          const sourceScaleY = video.videoHeight / Math.max(1, processingCanvas.height);
+          const sourceBbox = scaleBoundingBox(track.bbox, sourceScaleX, sourceScaleY);
+          const cropCanvas = cropCanvasRegionFast(video, sourceBbox);
+          const cropQuality = runtime.bestFrameSelector.addCropCandidate(track.trackNumber, cropCanvas, sourceBbox, {
+            trackStability: track.trackConfidence ?? 0.55,
+            perspectiveScore: Math.max(0, 1 - Math.abs(track.overlayAngle ?? 0) / MAX_OVERLAY_TILT_RAD),
+          });
+          const nextBestId = runtime.bestFrameSelector.getBestCrop(track.trackNumber)?.id;
+          if (previousBestId && nextBestId && previousBestId !== nextBestId) {
+            runtimeMetricsRef.current.bestFrameReplacementCount++;
+            if (track.stats) {
+              track.stats.bestFrameReplacementCount = (track.stats.bestFrameReplacementCount ?? 0) + 1;
+            }
+          }
           runtimeMetricsRef.current.cropQualityTotal += cropQuality.overallScore;
           runtimeMetricsRef.current.cropQualitySamples++;
           if (track.stats) {
@@ -2523,6 +2633,7 @@ export default function ScannerPage() {
           runtimeMetricsRef.current.maxOcrQueueDepth,
           priorityIds.length
         );
+        runtimeMetricsRef.current.tracksWaitingForBetterCrop = 0;
 
         for (let priorityIndex = 0; priorityIndex < priorityIds.length; priorityIndex++) {
           const trackId = priorityIds[priorityIndex];
@@ -2582,14 +2693,6 @@ export default function ScannerPage() {
             continue;
           }
 
-          const bestFrameEntry = slotRuntime.bestFrameSelector.getBestCrop(track.trackNumber);
-          const targetCropFromBest = !!bestFrameEntry?.canvas;
-          const targetCrop = bestFrameEntry?.canvas ?? cropCanvasRegionFast(canvas, track.bbox);
-          const releaseRejectedTargetCrop = () => {
-            if (!targetCropFromBest) releaseCanvasMemory(targetCrop);
-          };
-          const qualityReport = bestFrameEntry?.quality;
-          const bestCropAge = bestFrameEntry ? now - bestFrameEntry.timestamp : 0;
           const minQualityForOcr = Math.max(
             scannerSettings.minCropQuality || INITIAL_SETTINGS.minCropQuality,
             adaptiveConfig.ocr.minQuality,
@@ -2598,43 +2701,87 @@ export default function ScannerPage() {
               : Math.max(OCR_REPEAT_READ_MIN_QUALITY, adaptiveConfig.ocr.repeatReadMinQuality)
           );
 
-          if (
-            (voteCount === 0 && bestCropAge > Math.max(OCR_MAX_BEST_CROP_AGE_MS, adaptiveConfig.ocr.maxBestCropAgeMs)) ||
-            qualityReport?.recommendation === 'REJECT' ||
-            (qualityReport?.overallScore ?? 0.6) < minQualityForOcr
-          ) {
-            track.ocrState = 'LOW QUALITY';
-            track.pipelineState = 'COLLECTING';
-            releaseRejectedTargetCrop();
-            continue;
-          }
-
-          const modelQuality = await classifyPlateQuality(targetCrop, {
-            heuristicReport: qualityReport,
-            minReadableWidth,
-            minQualityScore: minQualityForOcr,
-            acceptedClasses: adaptiveConfig.qualityGate.acceptedClasses,
-            marginalClasses: adaptiveConfig.qualityGate.marginalClasses,
-            minimumClassifierConfidence: adaptiveConfig.qualityGate.minimumClassifierConfidence,
-          });
-          runtimeMetricsRef.current.currentQuality = modelQuality.label;
-          runtimeMetricsRef.current.currentQualityConfidence = modelQuality.confidence;
-          runtimeMetricsRef.current.currentQualitySource = modelQuality.source;
-          runtimeMetricsRef.current.qualityDistribution = incrementDistribution(
-            runtimeMetricsRef.current.qualityDistribution,
-            modelQuality.label
+          const candidateEntries = slotRuntime.bestFrameSelector.getTopCrops(
+            track.trackNumber,
+            Math.max(2, Math.min(4, adaptiveConfig.ocr.maxCandidateCrops))
           );
-
-          if (track.stats) {
-            track.stats.bestCropQuality = Math.max(track.stats.bestCropQuality ?? 0, modelQuality.score);
-          }
-
-          if (!modelQuality.shouldSendToOcr) {
+          if (candidateEntries.length === 0) {
             track.ocrState = 'LOW QUALITY';
             track.pipelineState = 'COLLECTING';
-            releaseRejectedTargetCrop();
+            runtimeMetricsRef.current.qualityOcrAvoidedCount++;
+            runtimeMetricsRef.current.tracksWaitingForBetterCrop++;
             continue;
           }
+
+          let targetCrop: HTMLCanvasElement | null = null;
+          let targetCropFromBest = false;
+          let modelQuality: PlateQualityAssessment | null = null;
+          const maxBestCropAgeMs = Math.max(OCR_MAX_BEST_CROP_AGE_MS, adaptiveConfig.ocr.maxBestCropAgeMs);
+
+          for (const candidate of candidateEntries) {
+            const cropAgeMs = now - candidate.timestamp;
+            if (voteCount === 0 && cropAgeMs > maxBestCropAgeMs) continue;
+
+            const assessment = await classifyPlateQuality(candidate.canvas, {
+              heuristicReport: candidate.quality,
+              minReadableWidth,
+              minQualityScore: minQualityForOcr,
+              detectorConfidence: candidate.detectorConfidence,
+              trackStability: candidate.trackStability,
+              perspectiveScore: candidate.perspectiveScore,
+              cropAgeMs,
+              maxCropAgeMs: maxBestCropAgeMs,
+              acceptedClasses: adaptiveConfig.qualityGate.acceptedClasses,
+              marginalClasses: adaptiveConfig.qualityGate.marginalClasses,
+              minimumClassifierConfidence: adaptiveConfig.qualityGate.minimumClassifierConfidence,
+            });
+            addQualityAssessmentSample(runtimeMetricsRef.current, assessment);
+            attachQualityAssessmentToTrack(track, assessment, false);
+            slotRuntime.bestFrameSelector.updateCropAssessment(track.trackNumber, candidate.id, assessment);
+
+            if (assessment.acceptableForOCR) {
+              targetCrop = candidate.canvas;
+              targetCropFromBest = true;
+              modelQuality = assessment;
+              break;
+            }
+
+            const recovered = await recoverCorrectablePlateCrop(candidate.canvas, assessment, undefined, {
+              minReadableWidth,
+              minQualityScore: minQualityForOcr,
+              detectorConfidence: candidate.detectorConfidence,
+              trackStability: candidate.trackStability,
+              perspectiveScore: candidate.perspectiveScore,
+              cropAgeMs,
+              maxCropAgeMs: maxBestCropAgeMs,
+              minimumClassifierConfidence: adaptiveConfig.qualityGate.minimumClassifierConfidence,
+            });
+
+            if (recovered) {
+              addQualityAssessmentSample(runtimeMetricsRef.current, recovered.assessment);
+              runtimeMetricsRef.current.qualityCorrectableRecoveredCount++;
+              targetCrop = recovered.crop;
+              targetCropFromBest = false;
+              modelQuality = {
+                ...recovered.assessment,
+                selectedPreprocessing: [recovered.variant],
+              };
+              break;
+            }
+          }
+
+          if (!targetCrop || !modelQuality) {
+            track.ocrState = 'LOW QUALITY';
+            track.pipelineState = 'COLLECTING';
+            runtimeMetricsRef.current.qualityOcrAvoidedCount++;
+            runtimeMetricsRef.current.tracksWaitingForBetterCrop++;
+            continue;
+          }
+
+          attachQualityAssessmentToTrack(track, modelQuality, false);
+          const releaseRejectedTargetCrop = () => {
+            if (!targetCropFromBest && targetCrop) releaseCanvasMemory(targetCrop);
+          };
 
           if (
             shouldSkipTrackForOcrPressure(
@@ -2642,7 +2789,7 @@ export default function ScannerPage() {
               ocrQueuePressure,
               priorityIndex,
               maxOcrConcurrency,
-              modelQuality.score
+              modelQuality.qualityScore
             )
           ) {
             track.ocrState = 'COLLECTING';
@@ -2653,6 +2800,7 @@ export default function ScannerPage() {
           }
 
           track.pipelineState = 'READY_FOR_OCR';
+          attachQualityAssessmentToTrack(track, modelQuality, true);
           track.ocrRunning = true;
           track.ocrJobQueued = true;
           track.lastOcrAttemptAt = now;
@@ -2782,6 +2930,10 @@ export default function ScannerPage() {
                 environmentConfidence: ocrEnvironmentConfidence,
                 qualityClass: ocrQualityClass,
                 qualityConfidence: ocrQualityConfidence,
+                qualityScore: modelQuality.qualityScore,
+                qualityBackend: modelQuality.backend,
+                qualityRejectionReasons: modelQuality.rejectionReasons,
+                selectedPreprocessing: modelQuality.selectedPreprocessing,
                 ocrResult: text,
                 ocrConfidence: conf,
                 detectorConfidence: track.bbox.confidence ?? 0,
@@ -2923,7 +3075,7 @@ export default function ScannerPage() {
               overlayCanvas.width,
               overlayCanvas.height,
               displayTracks,
-              false
+              scannerSettings.debugMode
             );
           }
 
@@ -3040,6 +3192,38 @@ export default function ScannerPage() {
       ctx.textBaseline = 'middle';
       ctx.fillText(label, pillCx, pillCy);
       ctx.restore();
+
+      if (showGuide) {
+        const debugLines = [
+          `Q ${track.qualityClass ?? 'WAIT'} ${Math.round((track.qualityConfidence ?? 0) * 100)}% score ${Math.round((track.qualityScore ?? 0) * 100)}%`,
+          `engine ${track.qualityBackend ?? getPlateQualityBackend()} ${track.qualityAcceptedForOcr ? 'ACCEPT' : 'WAIT'}`,
+          `crop ${track.qualityCropSize ? `${track.qualityCropSize.width}x${track.qualityCropSize.height}` : '-'} sharp ${Math.round((track.qualitySharpness ?? 0) * 100)}%`,
+          `prep ${(track.qualitySelectedPreprocessing ?? ['ORIGINAL']).join(',')} submitted ${track.qualitySubmittedToOcr ? 'YES' : 'NO'}`,
+          track.qualityRejectionReasons?.length ? `reason ${track.qualityRejectionReasons.slice(0, 2).join(',')}` : '',
+        ].filter(Boolean);
+        const lineHeight = 13;
+        const panelWidth = Math.min(width - 8, Math.max(180, ...debugLines.map((line) => ctx.measureText(line).width + 12)));
+        const panelHeight = debugLines.length * lineHeight + 8;
+        const panelX = clampNumber(x, 4, Math.max(4, width - panelWidth - 4));
+        const panelY = clampNumber(y + boxHeight + 8, 4, Math.max(4, height - panelHeight - 4));
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.82)';
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        drawRoundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#cffafe';
+        debugLines.forEach((line, index) => {
+          ctx.fillText(line, panelX + 6, panelY + 5 + index * lineHeight);
+        });
+        ctx.restore();
+      }
     });
   }
 
@@ -3086,8 +3270,18 @@ export default function ScannerPage() {
       quality: {
         current: snapshot.currentQuality,
         confidence: snapshot.currentQualityConfidence,
-        source: snapshot.currentQualitySource,
+        backend: snapshot.currentQualityBackend,
+        engine: getPlateQualityEngineLabel(),
         modelStatus: getPlateQualityModelStatus(),
+        latencyAvgMs: snapshot.qualityLatencyAvgMs,
+        latencyP95Ms: snapshot.qualityLatencyP95Ms,
+        acceptedCrops: snapshot.qualityAcceptedCropCount,
+        rejectedCrops: snapshot.qualityRejectedCropCount,
+        rejectionReasons: snapshot.qualityRejectionReasons,
+        ocrAvoided: snapshot.qualityOcrAvoidedCount,
+        correctableRecovered: snapshot.qualityCorrectableRecoveredCount,
+        heuristicUsage: snapshot.heuristicQualityUsageCount,
+        onnxUsage: snapshot.onnxQualityUsageCount,
         distributionPercent: serializeDistributionPercentages(snapshot.qualityDistribution),
       },
       camera: {
@@ -3143,6 +3337,18 @@ export default function ScannerPage() {
         motionScore: track.motionScore ?? 0,
         trackConfidence: track.trackConfidence ?? 0,
         confidenceComponents: track.confidenceComponents,
+        quality: {
+          className: track.qualityClass,
+          confidence: track.qualityConfidence,
+          score: track.qualityScore,
+          backend: track.qualityBackend,
+          acceptedForOcr: track.qualityAcceptedForOcr,
+          rejectionReasons: track.qualityRejectionReasons,
+          cropSize: track.qualityCropSize,
+          sharpness: track.qualitySharpness,
+          selectedPreprocessing: track.qualitySelectedPreprocessing,
+          submittedToOcr: track.qualitySubmittedToOcr,
+        },
         stats: track.stats,
         currentPlate: getTrackPlateText(track),
       })),
@@ -3167,6 +3373,9 @@ export default function ScannerPage() {
       text: sample.ocrResult,
       confidence: sample.ocrConfidence,
       qualityClass: sample.qualityClass,
+      qualityScore: sample.qualityScore,
+      qualityBackend: sample.qualityBackend,
+      selectedPreprocessing: sample.selectedPreprocessing,
       environmentClass: sample.environmentClass,
       timestamp: sample.timestamp,
     }));
@@ -3182,12 +3391,17 @@ export default function ScannerPage() {
         task: 'plate_quality',
         className: sample.qualityClass,
         confidence: sample.qualityConfidence,
+        qualityScore: sample.qualityScore,
+        backend: sample.qualityBackend,
+        rejectionReasons: sample.qualityRejectionReasons,
       },
     ]);
 
     downloadJson(`track_dataset_export_${Date.now()}.json`, {
       exportedAt: new Date().toISOString(),
+      schemaVersion: 2,
       sampleCount: samples.length,
+      qualityTask: createPlateQualityDatasetSchema(),
       folderStructure: samples.map((sample) => sample.folderPath),
       yoloDataset,
       ocrDataset,
@@ -3398,6 +3612,7 @@ export default function ScannerPage() {
             ['Detector FPS', detFps.toFixed(0)],
             ['OCR Queue', runtimeMetricsSnapshot.lastOcrQueueDepth.toFixed(0)],
             ['Quality', `${runtimeMetricsSnapshot.currentQuality} ${Math.round(runtimeMetricsSnapshot.currentQualityConfidence * 100)}%`],
+            ['Quality Engine', getPlateQualityEngineLabel().replace('QUALITY ENGINE: ', '')],
             ['Current Environment', runtimeMetricsSnapshot.currentEnvironment],
             ['Current Camera', activeCameraMetadata?.kind?.replaceAll('_', ' ') || 'UNKNOWN'],
             ['Developer Mode', developerMode ? 'ON' : 'OFF'],
@@ -3732,8 +3947,17 @@ export default function ScannerPage() {
               ['OCR profile', runtimeMetricsSnapshot.ocrProfile],
               ['Env model', getEnvironmentModelStatus()],
               ['Quality model', getPlateQualityModelStatus()],
+              ['Quality engine', getPlateQualityEngineLabel().replace('QUALITY ENGINE: ', '')],
               ['Environment', `${runtimeMetricsSnapshot.currentEnvironment} ${Math.round(runtimeMetricsSnapshot.currentEnvironmentConfidence * 100)}%`],
               ['Quality', `${runtimeMetricsSnapshot.currentQuality} ${Math.round(runtimeMetricsSnapshot.currentQualityConfidence * 100)}%`],
+              ['Quality P95', `${runtimeMetricsSnapshot.qualityLatencyP95Ms.toFixed(0)} ms`],
+              ['Quality accept', runtimeMetricsSnapshot.qualityAcceptedCropCount.toFixed(0)],
+              ['Quality reject', runtimeMetricsSnapshot.qualityRejectedCropCount.toFixed(0)],
+              ['OCR avoided', runtimeMetricsSnapshot.qualityOcrAvoidedCount.toFixed(0)],
+              ['Recovered', runtimeMetricsSnapshot.qualityCorrectableRecoveredCount.toFixed(0)],
+              ['Best replacements', runtimeMetricsSnapshot.bestFrameReplacementCount.toFixed(0)],
+              ['Waiting crops', runtimeMetricsSnapshot.tracksWaitingForBetterCrop.toFixed(0)],
+              ['Heuristic/ONNX', `${runtimeMetricsSnapshot.heuristicQualityUsageCount}/${runtimeMetricsSnapshot.onnxQualityUsageCount}`],
               ['Detector P50', `${runtimeMetricsSnapshot.detectorLatencyMedianMs.toFixed(0)} ms`],
               ['Detector P95', `${runtimeMetricsSnapshot.detectorLatencyP95Ms.toFixed(0)} ms`],
               ['OCR P50', `${runtimeMetricsSnapshot.ocrLatencyMedianMs.toFixed(0)} ms`],

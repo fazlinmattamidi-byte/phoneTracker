@@ -41,6 +41,8 @@ export interface TrackRuntimeStats {
   lastDetectorLatencyMs?: number;
   lastOcrLatencyMs?: number;
   bestCropQuality?: number;
+  lastQualityLatencyMs?: number;
+  bestFrameReplacementCount?: number;
 }
 
 export interface TrackCropSample {
@@ -72,6 +74,16 @@ export interface ActiveTrack {
   motionScore?: number;
   trackConfidence?: number;
   confidenceComponents?: TrackConfidenceComponents;
+  qualityClass?: string;
+  qualityConfidence?: number;
+  qualityScore?: number;
+  qualityBackend?: string;
+  qualityAcceptedForOcr?: boolean;
+  qualityRejectionReasons?: string[];
+  qualityCropSize?: { width: number; height: number };
+  qualitySharpness?: number;
+  qualitySelectedPreprocessing?: string[];
+  qualitySubmittedToOcr?: boolean;
   trackState?: TrackLifecycleState;
   pipelineState?: PlatePipelineState;
   stats?: TrackRuntimeStats;

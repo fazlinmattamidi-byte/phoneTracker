@@ -7,7 +7,7 @@ Input:
     train/GOOD/*.jpg
     train/MOTION_BLUR/*.jpg
     ...
-    val/REFLECTION/*.jpg
+    val/GLARE_REFLECTION/*.jpg
 
 Output:
   public/models/plate-quality-classifier.onnx
@@ -25,16 +25,16 @@ from pathlib import Path
 from typing import Any
 
 PLATE_QUALITY_CLASSES = [
-    "READABLE",
     "GOOD",
-    "SLIGHT_BLUR",
     "MOTION_BLUR",
     "OUT_OF_FOCUS",
     "TOO_SMALL",
     "LOW_CONTRAST",
-    "DIRTY",
+    "OVEREXPOSED",
+    "UNDEREXPOSED",
+    "GLARE_REFLECTION",
     "OCCLUDED",
-    "REFLECTION",
+    "BAD_ANGLE",
 ]
 
 
@@ -251,6 +251,16 @@ def build_metadata(
             source_metadata = {}
 
     return {
+        "modelType": "yolov8-classification",
+        "task": "plate-quality-assessment",
+        "inputWidth": args.imgsz,
+        "inputHeight": args.imgsz,
+        "layout": "NCHW",
+        "colorSpace": "RGB",
+        "resizeMode": "letterbox",
+        "normalization": {
+            "scale": 0.00392156862745098,
+        },
         "model": "PlateQ Plate Quality YOLOv8 Classification",
         "framework": "YOLOv8 Classification",
         "dataset": "PlateQ Dataset Mode",

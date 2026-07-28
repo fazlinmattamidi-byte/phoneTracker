@@ -209,16 +209,16 @@ TEST1234,Farid,Proton,S70,Silver,Maybank,25000.00,MBB999,ACTIVE,New test case`;
 
   it('uses the plate-quality classifier class set', () => {
     expect(PLATE_QUALITY_CLASSES).toEqual([
-      'READABLE',
       'GOOD',
-      'SLIGHT_BLUR',
       'MOTION_BLUR',
       'OUT_OF_FOCUS',
       'TOO_SMALL',
       'LOW_CONTRAST',
-      'DIRTY',
+      'OVEREXPOSED',
+      'UNDEREXPOSED',
+      'GLARE_REFLECTION',
       'OCCLUDED',
-      'REFLECTION',
+      'BAD_ANGLE',
     ]);
   });
 });

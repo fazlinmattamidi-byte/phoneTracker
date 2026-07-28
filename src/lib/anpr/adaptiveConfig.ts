@@ -19,16 +19,16 @@ export const ENVIRONMENT_CLASSES = [
 export type EnvironmentClass = (typeof ENVIRONMENT_CLASSES)[number];
 
 export const PLATE_QUALITY_CLASSES = [
-  'READABLE',
   'GOOD',
-  'SLIGHT_BLUR',
   'MOTION_BLUR',
   'OUT_OF_FOCUS',
   'TOO_SMALL',
   'LOW_CONTRAST',
-  'DIRTY',
+  'OVEREXPOSED',
+  'UNDEREXPOSED',
+  'GLARE_REFLECTION',
   'OCCLUDED',
-  'REFLECTION',
+  'BAD_ANGLE',
 ] as const;
 
 export type PlateQualityClass = (typeof PLATE_QUALITY_CLASSES)[number];
@@ -200,8 +200,8 @@ export function createAdaptiveScannerConfig(
       useInnerTextCrop: true,
     },
     qualityGate: {
-      acceptedClasses: ['READABLE', 'GOOD'],
-      marginalClasses: ['SLIGHT_BLUR', 'LOW_CONTRAST'],
+      acceptedClasses: ['GOOD'],
+      marginalClasses: ['LOW_CONTRAST', 'UNDEREXPOSED', 'OVEREXPOSED', 'GLARE_REFLECTION'],
       minimumClassifierConfidence: 0.45,
     },
     track: {
@@ -274,7 +274,7 @@ export function createAdaptiveScannerConfig(
           maxBestCropAgeMs: 3000,
         },
         qualityGate: {
-          marginalClasses: ['SLIGHT_BLUR'],
+          marginalClasses: ['LOW_CONTRAST', 'UNDEREXPOSED', 'GLARE_REFLECTION'],
           minimumClassifierConfidence: 0.50,
         },
         track: {
@@ -306,7 +306,7 @@ export function createAdaptiveScannerConfig(
           maxCandidateCrops: 6,
         },
         qualityGate: {
-          acceptedClasses: ['GOOD', 'READABLE'],
+          acceptedClasses: ['GOOD'],
           marginalClasses: [],
           minimumClassifierConfidence: 0.52,
         },
@@ -336,7 +336,7 @@ export function createAdaptiveScannerConfig(
           maxCandidateCrops: 6,
         },
         qualityGate: {
-          marginalClasses: ['REFLECTION', 'LOW_CONTRAST', 'SLIGHT_BLUR'],
+          marginalClasses: ['GLARE_REFLECTION', 'LOW_CONTRAST', 'OVEREXPOSED'],
         },
       });
 

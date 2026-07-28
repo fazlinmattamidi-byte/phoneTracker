@@ -35,9 +35,10 @@ If this file is not present, the scanner uses a deterministic frame-stat heurist
 - **Framework:** YOLOv8 Classification
 - **Path:** `/models/plate-quality-classifier.onnx`
 - **Metadata:** `/models/plate-quality-classifier.metadata.json`
-- **Classes:** `READABLE`, `GOOD`, `SLIGHT_BLUR`, `MOTION_BLUR`, `OUT_OF_FOCUS`, `TOO_SMALL`, `LOW_CONTRAST`, `DIRTY`, `OCCLUDED`, `REFLECTION`
+- **Classes:** `GOOD`, `MOTION_BLUR`, `OUT_OF_FOCUS`, `TOO_SMALL`, `LOW_CONTRAST`, `OVEREXPOSED`, `UNDEREXPOSED`, `GLARE_REFLECTION`, `OCCLUDED`, `BAD_ANGLE`
 
 This model does not read text. It only decides whether a plate crop should be admitted to OCR. If absent, the scanner uses the existing crop-quality heuristics.
+The quality model receives cropped licence plates only. Do not use full-scene classes such as rain, night, day, highway, parking, or traffic here.
 
 Train/export with reviewed Dataset Mode exports:
 

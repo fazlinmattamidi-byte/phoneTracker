@@ -26,16 +26,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 PLATE_QUALITY_CLASSES = [
-    "READABLE",
     "GOOD",
-    "SLIGHT_BLUR",
     "MOTION_BLUR",
     "OUT_OF_FOCUS",
     "TOO_SMALL",
     "LOW_CONTRAST",
-    "DIRTY",
+    "OVEREXPOSED",
+    "UNDEREXPOSED",
+    "GLARE_REFLECTION",
     "OCCLUDED",
-    "REFLECTION",
+    "BAD_ANGLE",
 ]
 
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.DOTALL)

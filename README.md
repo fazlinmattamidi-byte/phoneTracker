@@ -57,6 +57,8 @@ npm run train:quality -- --data datasets/plate-quality-cls
 
 See `docs/plate-quality-model.md` for label definitions and the Dataset Mode conversion workflow.
 
+The environment model evaluates the full camera scene. The plate-quality model evaluates only cropped licence plates detected by YOLOv8, and its classes must not include weather, road type, or lighting scene labels.
+
 ## Adaptive Runtime
 
 The adaptive configuration engine changes detector cadence, confidence gates, best-frame buffer length, preprocessing variants, OCR thresholds, consensus votes, and OCR queue behavior based on the current environment profile.

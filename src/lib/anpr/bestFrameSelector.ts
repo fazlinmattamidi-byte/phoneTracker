@@ -6,13 +6,18 @@
  */
 
 import { assessCropQuality, CropQualityReport } from './qualityAssessor';
+import type { PlateQualityResult } from './plateQualityService';
 
 export interface FrameCropEntry {
   id: string;
   canvas: HTMLCanvasElement;
   quality: CropQualityReport;
+  qualityAssessment?: PlateQualityResult;
   timestamp: number;
   bbox: { x: number; y: number; width: number; height: number };
+  detectorConfidence: number;
+  trackStability: number;
+  perspectiveScore: number;
 }
 
 export class BestFrameSelector {
@@ -40,7 +45,22 @@ export class BestFrameSelector {
 
   private scoreEntry(entry: FrameCropEntry, now: number): number {
     const ageScore = Math.max(0, 1 - (now - entry.timestamp) / this.maxEntryAgeMs);
-    return entry.quality.overallScore * 0.78 + ageScore * 0.22;
+    const modelScore = entry.qualityAssessment?.qualityScore ?? entry.quality.overallScore;
+    const sizeScore = Math.min(1, (entry.bbox.width * entry.bbox.height) / (170 * 46));
+    const sharpness = entry.quality.sharpnessScore;
+    const detectorConfidence = entry.detectorConfidence;
+    const stability = entry.trackStability;
+    const perspective = entry.perspectiveScore;
+
+    return (
+      modelScore * 0.42 +
+      sharpness * 0.16 +
+      detectorConfidence * 0.14 +
+      sizeScore * 0.10 +
+      stability * 0.08 +
+      perspective * 0.05 +
+      ageScore * 0.05
+    );
   }
 
   private pruneTrackBuffer(trackId: number, now: number): void {
@@ -87,7 +107,8 @@ export class BestFrameSelector {
   public addCropCandidate(
     trackId: number,
     canvas: HTMLCanvasElement,
-    bbox: { x: number; y: number; width: number; height: number }
+    bbox: { x: number; y: number; width: number; height: number; confidence?: number },
+    options: { trackStability?: number; perspectiveScore?: number } = {}
   ): CropQualityReport {
     const now = Date.now();
     this.pruneStale(this.maxEntryAgeMs, undefined, now);
@@ -99,6 +120,9 @@ export class BestFrameSelector {
       quality,
       timestamp: now,
       bbox,
+      detectorConfidence: Math.min(1, Math.max(0, bbox.confidence ?? 0.75)),
+      trackStability: Math.min(1, Math.max(0, options.trackStability ?? 0.55)),
+      perspectiveScore: Math.min(1, Math.max(0, options.perspectiveScore ?? quality.aspectRatioScore)),
     };
 
     if (!this.trackBuffers.has(trackId)) {
@@ -138,6 +162,27 @@ export class BestFrameSelector {
       }
     }
     return best;
+  }
+
+  public getTopCrops(trackId: number, limit = 3): FrameCropEntry[] {
+    const now = Date.now();
+    this.pruneTrackBuffer(trackId, now);
+
+    const buffer = this.trackBuffers.get(trackId);
+    if (!buffer || buffer.length === 0) return [];
+
+    return [...buffer]
+      .sort((a, b) => this.scoreEntry(b, now) - this.scoreEntry(a, now))
+      .slice(0, Math.max(1, Math.min(8, Math.round(limit))));
+  }
+
+  public updateCropAssessment(trackId: number, entryId: string, assessment: PlateQualityResult): void {
+    const buffer = this.trackBuffers.get(trackId);
+    if (!buffer) return;
+
+    const entry = buffer.find((candidate) => candidate.id === entryId);
+    if (!entry) return;
+    entry.qualityAssessment = assessment;
   }
 
   /**

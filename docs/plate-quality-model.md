@@ -5,16 +5,16 @@ The plate quality model is a YOLOv8 classification model that decides whether a 
 ## Classes
 
 ```text
-READABLE
 GOOD
-SLIGHT_BLUR
 MOTION_BLUR
 OUT_OF_FOCUS
 TOO_SMALL
 LOW_CONTRAST
-DIRTY
+OVEREXPOSED
+UNDEREXPOSED
+GLARE_REFLECTION
 OCCLUDED
-REFLECTION
+BAD_ANGLE
 ```
 
 The browser runtime reads `/models/plate-quality-classifier.metadata.json` when present, so the ONNX output order stays aligned with the trained model.
@@ -73,19 +73,51 @@ public/models/plate-quality-classifier.metadata.json
 
 If the model is absent, the scanner continues using the deterministic crop-quality heuristic fallback.
 
+## Metadata
+
+The runtime supports this sidecar format:
+
+```json
+{
+  "modelType": "yolov8-classification",
+  "task": "plate-quality-assessment",
+  "inputWidth": 224,
+  "inputHeight": 224,
+  "layout": "NCHW",
+  "colorSpace": "RGB",
+  "resizeMode": "letterbox",
+  "normalization": {
+    "scale": 0.00392156862745098
+  },
+  "classes": [
+    "GOOD",
+    "MOTION_BLUR",
+    "OUT_OF_FOCUS",
+    "TOO_SMALL",
+    "LOW_CONTRAST",
+    "OVEREXPOSED",
+    "UNDEREXPOSED",
+    "GLARE_REFLECTION",
+    "OCCLUDED",
+    "BAD_ANGLE"
+  ]
+}
+```
+
 ## Recommended Labeling Rules
 
-Use `GOOD` for crisp, readable crops with strong contrast. Use `READABLE` for crops OCR can probably read but that are not ideal.
+Use `GOOD` for crisp, readable crops with strong contrast.
 
 Use failure labels for the dominant reason OCR should be delayed or skipped:
 
 | Class | Meaning |
 | --- | --- |
-| `SLIGHT_BLUR` | Readable but softened |
 | `MOTION_BLUR` | Directional streaking from movement |
 | `OUT_OF_FOCUS` | Defocused crop |
 | `TOO_SMALL` | Plate text is too small for reliable OCR |
 | `LOW_CONTRAST` | Washed-out, dark, or weak text/background separation |
-| `DIRTY` | Dirt, haze, water, or smeared lens/crop |
+| `OVEREXPOSED` | Washed-out crop or clipped highlights |
+| `UNDEREXPOSED` | Plate is too dark |
+| `GLARE_REFLECTION` | Glare or reflected light across text |
 | `OCCLUDED` | Plate partly hidden |
-| `REFLECTION` | Glare or reflected light across text |
+| `BAD_ANGLE` | Severe skew or perspective distortion |

@@ -9,7 +9,10 @@ export type PreprocessVariant =
   | 'CLAHE'
   | 'SHARPEN'
   | 'DARK_BG'
-  | 'NOISE_REDUCED';
+  | 'NOISE_REDUCED'
+  | 'GAMMA_BRIGHTEN'
+  | 'HIGHLIGHT_REDUCED'
+  | 'PERSPECTIVE';
 
 export interface MultiCropResult {
   variant: PreprocessVariant;
@@ -42,6 +45,43 @@ function getSourceDimensions(sourceCanvas: HTMLCanvasElement | HTMLVideoElement)
   return {
     width: sourceCanvas.width || 0,
     height: sourceCanvas.height || 0,
+  };
+}
+
+export function clampCropBox(
+  bbox: BoundingBox,
+  sourceWidth: number,
+  sourceHeight: number,
+  paddingRatioX = 0.08,
+  paddingRatioY = 0.12
+): BoundingBox {
+  const padX = Math.max(0, bbox.width * paddingRatioX);
+  const padY = Math.max(0, bbox.height * paddingRatioY);
+  const x = clamp(Math.round(bbox.x - padX), 0, Math.max(0, sourceWidth - 1));
+  const y = clamp(Math.round(bbox.y - padY), 0, Math.max(0, sourceHeight - 1));
+  const right = clamp(Math.round(bbox.x + bbox.width + padX), x + 1, sourceWidth);
+  const bottom = clamp(Math.round(bbox.y + bbox.height + padY), y + 1, sourceHeight);
+
+  return {
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y),
+    confidence: bbox.confidence,
+  };
+}
+
+export function scaleBoundingBox(
+  bbox: BoundingBox,
+  scaleX: number,
+  scaleY: number
+): BoundingBox {
+  return {
+    x: bbox.x * scaleX,
+    y: bbox.y * scaleY,
+    width: bbox.width * scaleX,
+    height: bbox.height * scaleY,
+    confidence: bbox.confidence,
   };
 }
 
@@ -348,21 +388,10 @@ export function generateAdaptiveCrops(
     const ctx = cropCanvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) continue;
 
-    const padX = bbox.width * 0.08;
-    const padY = bbox.height * 0.12;
+    const { width: sourceWidth, height: sourceHeight } = getSourceDimensions(sourceCanvas);
+    const cropBox = clampCropBox(bbox, sourceWidth, sourceHeight);
 
-    const srcX = Math.max(0, bbox.x - padX);
-    const srcY = Math.max(0, bbox.y - padY);
-    const srcW = Math.min(
-      (sourceCanvas.width || (sourceCanvas as HTMLVideoElement).videoWidth) - srcX,
-      bbox.width + padX * 2
-    );
-    const srcH = Math.min(
-      (sourceCanvas.height || (sourceCanvas as HTMLVideoElement).videoHeight) - srcY,
-      bbox.height + padY * 2
-    );
-
-    ctx.drawImage(sourceCanvas, srcX, srcY, srcW, srcH, 0, 0, scaledW, scaledH);
+    ctx.drawImage(sourceCanvas, cropBox.x, cropBox.y, cropBox.width, cropBox.height, 0, 0, scaledW, scaledH);
 
     // Apply specific preprocessing variant
     preprocessCropVariant(ctx, scaledW, scaledH, variant);
@@ -468,6 +497,24 @@ export function preprocessCropVariant(
         data[idx] = data[idx + 1] = data[idx + 2] = Math.round(avg / 9);
       }
     }
+  } else if (variant === 'GAMMA_BRIGHTEN') {
+    for (let i = 0; i < data.length; i += 4) {
+      const normalized = data[i] / 255;
+      const v = Math.round(Math.pow(normalized, 0.68) * 255);
+      data[i] = data[i + 1] = data[i + 2] = v;
+    }
+  } else if (variant === 'HIGHLIGHT_REDUCED') {
+    for (let i = 0; i < data.length; i += 4) {
+      const normalized = data[i] / 255;
+      const compressed = normalized > 0.70
+        ? 0.70 + (normalized - 0.70) * 0.45
+        : normalized;
+      const v = Math.round(clamp(compressed * 1.08, 0, 1) * 255);
+      data[i] = data[i + 1] = data[i + 2] = v;
+    }
+  } else if (variant === 'PERSPECTIVE') {
+    // Placeholder hook for future corner-based rectification. With only an axis-aligned
+    // detector box available, keep the crop geometry unchanged.
   }
 
   ctx.putImageData(imgData, 0, 0);
@@ -578,14 +625,9 @@ export function cropCanvasRegionFast(
   if (!ctx) return cropCanvas;
 
   const { width: sourceWidth, height: sourceHeight } = getSourceDimensions(sourceCanvas);
-  const padX = bbox.width * 0.08;
-  const padY = bbox.height * 0.12;
-  const srcX = Math.max(0, bbox.x - padX);
-  const srcY = Math.max(0, bbox.y - padY);
-  const srcW = Math.min(sourceWidth - srcX, bbox.width + padX * 2);
-  const srcH = Math.min(sourceHeight - srcY, bbox.height + padY * 2);
+  const cropBox = clampCropBox(bbox, sourceWidth, sourceHeight);
 
-  ctx.drawImage(sourceCanvas, srcX, srcY, srcW, srcH, 0, 0, scaledW, scaledH);
+  ctx.drawImage(sourceCanvas, cropBox.x, cropBox.y, cropBox.width, cropBox.height, 0, 0, scaledW, scaledH);
   return cropCanvas;
 }
 
