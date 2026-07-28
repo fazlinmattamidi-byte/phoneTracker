@@ -46,6 +46,9 @@ const PROVIDER_INIT_TIMEOUT_MS = 15000;
 const PROVIDER_WARMUP_TIMEOUT_MS = 8000;
 
 let activeOcrProvider: ActiveOcrProvider = 'NONE';
+// PP-OCR uses one ONNX session and reusable preprocessing buffers, so inference
+// is queued to avoid cross-camera races corrupting crops or tensors.
+let ppOcrInferenceQueue: Promise<void> = Promise.resolve();
 let reusableOcrCanvas: HTMLCanvasElement | null = null;
 let reusableOcrCtx: CanvasRenderingContext2D | null = null;
 let reusableOcrFloat32Data: Float32Array | null = null;
@@ -289,6 +292,17 @@ export async function recognizeWithPpOcr(
  * Execute PP-OCR on a single cropped canvas region with Memory Disposal Guarantee
  */
 async function runSingleCropPpOcr(
+  canvas: HTMLCanvasElement
+): Promise<{ rawText: string; confidence: number; characterConfidences: { char: string; confidence: number }[] }> {
+  const queuedInference = ppOcrInferenceQueue.then(() => runSingleCropPpOcrExclusive(canvas));
+  ppOcrInferenceQueue = queuedInference.then(
+    () => undefined,
+    () => undefined
+  );
+  return queuedInference;
+}
+
+async function runSingleCropPpOcrExclusive(
   canvas: HTMLCanvasElement
 ): Promise<{ rawText: string; confidence: number; characterConfidences: { char: string; confidence: number }[] }> {
   if (!ppOcrSession) {

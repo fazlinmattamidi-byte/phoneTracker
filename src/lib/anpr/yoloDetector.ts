@@ -51,8 +51,9 @@ const MODEL_FETCH_TIMEOUT_MS = 20000;
 const PROVIDER_INIT_TIMEOUT_MS = 15000;
 const PROVIDER_WARMUP_TIMEOUT_MS = 8000;
 
-// Inference singletons for zero GC overhead
-let isInferring = false;
+// Inference singletons for zero GC overhead. ONNX Runtime Web sessions and the
+// reusable tensor buffers are shared, so detector inference must run serially.
+let detectorQueue: Promise<void> = Promise.resolve();
 let reusableCanvas: HTMLCanvasElement | null = null;
 let reusableCtx: CanvasRenderingContext2D | null = null;
 let reusableFloat32Data: Float32Array | null = null;
@@ -261,9 +262,23 @@ async function runLocalOnnxDetection(
   minConfidence: number,
   iouThreshold: number
 ): Promise<DetectedPlateBox[]> {
-  if (!localOnnxSession || typeof window === 'undefined' || isInferring) return [];
+  if (!localOnnxSession || typeof window === 'undefined') return [];
 
-  isInferring = true;
+  const queuedInference = detectorQueue.then(() =>
+    runLocalOnnxDetectionExclusive(canvas, minConfidence, iouThreshold)
+  );
+  detectorQueue = queuedInference.then(
+    () => undefined,
+    () => undefined
+  );
+  return queuedInference;
+}
+
+async function runLocalOnnxDetectionExclusive(
+  canvas: HTMLCanvasElement,
+  minConfidence: number,
+  iouThreshold: number
+): Promise<DetectedPlateBox[]> {
   const targetSize = 640;
 
   // Reuse canvas & 2D context to avoid GC overhead
@@ -275,7 +290,6 @@ async function runLocalOnnxDetection(
   }
 
   if (!reusableCtx) {
-    isInferring = false;
     return [];
   }
 
@@ -427,7 +441,6 @@ async function runLocalOnnxDetection(
         (tensor as any)?.dispose?.();
       }
     }
-    isInferring = false;
   }
 }
 

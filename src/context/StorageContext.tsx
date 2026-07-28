@@ -386,13 +386,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const exportHistoryCSV = () => {
-    const headers = 'ID,Type,Action,Plate,Details,UserRole,Timestamp,MatchStatus\n';
+    const headers = 'ID,Type,Action,Plate,Details,UserRole,Timestamp,MatchStatus,CameraID,CameraName\n';
     const rows = history
       .map(
         (h) =>
           `"${h.id}","${h.type}","${h.action}","${h.plate || ''}","${h.details}","${h.userRole}","${formatDate(
             h.timestamp
-          )}","${h.statusMatch || ''}"`
+          )}","${h.statusMatch || ''}","${h.cameraId || ''}","${h.cameraName || ''}"`
       )
       .join('\n');
     downloadCSV(createTimestampedCsvName('track_audit_history'), headers + rows);

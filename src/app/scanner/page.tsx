@@ -239,6 +239,8 @@ type ScannerMetricsSnapshot = ScannerRuntimeMetrics & {
 type CompletedTrackEvent = {
   id: string;
   trackId: string;
+  cameraId: string;
+  cameraName: string;
   plate: string;
   startedAt: string;
   endedAt: string;
@@ -1326,7 +1328,11 @@ function getCameraPreflightError(): string | null {
 
 function canRunMultiCameraOnCurrentDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  return isSupportedDesktopScannerBrowser();
+  const userAgent = navigator.userAgent || '';
+  const phoneLikeUserAgent = /Mobi|Android|iPhone|iPod|Windows Phone/i.test(userAgent);
+  const narrowViewport = window.matchMedia('(max-width: 767px)').matches;
+
+  return !phoneLikeUserAgent && !narrowViewport;
 }
 
 function mapVehicleToCase(vehicle: Vehicle): VehicleCase {
@@ -1356,7 +1362,7 @@ export default function ScannerPage() {
   const { t, language } = useLanguage();
   const { vehicles, addHistoryLog, updateVehicle, settings } = useStorage();
   const { role } = useAuth();
-  const canUseDiagnostics = role === 'ADMIN' || role === 'SUPER_ADMIN';
+  const canUseDiagnostics = false;
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const canvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
@@ -1413,7 +1419,7 @@ export default function ScannerPage() {
   );
   const [, setCurrentPlate] = useState('READY');
   const [, setLastDetectedSlotId] = useState('');
-  const [activeAlertMatch, setActiveAlertMatch] = useState<AlertMatch | null>(null);
+  const [activeAlertMatchesBySlot, setActiveAlertMatchesBySlot] = useState<Record<string, AlertMatch>>({});
   const [liveDetections, setLiveDetections] = useState<SessionDetection[]>([]);
   const [expandedDetectionId, setExpandedDetectionId] = useState<string | null>(null);
   const [runtimeState, setRuntimeState] = useState<ANPRRuntimeState>('UNINITIALIZED');
@@ -1968,6 +1974,12 @@ export default function ScannerPage() {
         setActiveCameraSlotId(nextSlots[0]?.id || 'camera-slot-1');
       }
       setPreviewSlotIds((ids) => ids.filter((id) => id !== slotId));
+      setActiveAlertMatchesBySlot((alerts) => {
+        if (!alerts[slotId]) return alerts;
+        const nextAlerts = { ...alerts };
+        delete nextAlerts[slotId];
+        return nextAlerts;
+      });
       return nextSlots;
     });
   };
@@ -2128,6 +2140,8 @@ export default function ScannerPage() {
             : resolvedMatchType === 'POSSIBLE'
             ? `Possible match from ${scanCameraName}: ${possibleVehicles.map((vehicle) => vehicle.plate).join(', ')}`
             : `No match from ${scanCameraName} at ${scanLocation.name}`,
+        cameraId: slotId || 'laptop-camera',
+        cameraName: scanCameraName,
         userRole: role,
         statusMatch: resolvedMatchType,
       });
@@ -2145,6 +2159,8 @@ export default function ScannerPage() {
       completedTrackEventsRef.current.unshift({
         id: detectionId,
         trackId: track.trackId,
+        cameraId: slotId || 'laptop-camera',
+        cameraName: scanCameraName,
         plate: normalizedPlate,
         startedAt: new Date(startedAt).toISOString(),
         endedAt: new Date(completedAt).toISOString(),
@@ -2189,7 +2205,11 @@ export default function ScannerPage() {
       track.scanEventId = detectionId;
 
       if (resolvedMatchType === 'EXACT' && matchedVehicle) {
-        setActiveAlertMatch({ vehicle: matchedVehicle, cameraName: scanCameraName, cameraId: slotId });
+        const alertSlotId = slotId || 'laptop-camera';
+        setActiveAlertMatchesBySlot((prev) => ({
+          ...prev,
+          [alertSlotId]: { vehicle: matchedVehicle, cameraName: scanCameraName, cameraId: alertSlotId },
+        }));
         playAlertChime();
       }
 
@@ -2452,11 +2472,12 @@ export default function ScannerPage() {
         const loopNow = Date.now();
 
         confirmedTracks.forEach((track) => {
-          if (track.trackState === 'LOST' && !lostTrackIdsRef.current.has(track.trackId)) {
-            lostTrackIdsRef.current.add(track.trackId);
+          const slotTrackKey = `${slotId}:${track.trackId}`;
+          if (track.trackState === 'LOST' && !lostTrackIdsRef.current.has(slotTrackKey)) {
+            lostTrackIdsRef.current.add(slotTrackKey);
             runtimeMetricsRef.current.lostTrackObservations++;
-          } else if (track.trackState === 'VISIBLE' && lostTrackIdsRef.current.has(track.trackId)) {
-            lostTrackIdsRef.current.delete(track.trackId);
+          } else if (track.trackState === 'VISIBLE' && lostTrackIdsRef.current.has(slotTrackKey)) {
+            lostTrackIdsRef.current.delete(slotTrackKey);
             runtimeMetricsRef.current.reacquiredTrackCount++;
           }
 
@@ -3230,7 +3251,8 @@ export default function ScannerPage() {
     });
   }
 
-  const handleMarkAsSeen = () => {
+  const handleMarkAsSeen = (slotId: string) => {
+    const activeAlertMatch = activeAlertMatchesBySlot[slotId];
     if (activeAlertMatch) {
       const flaggedObj = { ...activeAlertMatch.vehicle, status: 'FLAGGED' as const };
       updateVehicle(flaggedObj);
@@ -3240,11 +3262,18 @@ export default function ScannerPage() {
         plate: activeAlertMatch.vehicle.plate,
         details: `Alert Tanda Tindakan disemak oleh ${role} pada ${activeAlertMatch.cameraName}`,
         note: `Ditanda Tindakan oleh ${role} pada ${activeAlertMatch.cameraName}`,
+        cameraId: activeAlertMatch.cameraId,
+        cameraName: activeAlertMatch.cameraName,
         userRole: role,
         statusMatch: 'EXACT',
       });
     }
-    setActiveAlertMatch(null);
+    setActiveAlertMatchesBySlot((alerts) => {
+      if (!alerts[slotId]) return alerts;
+      const nextAlerts = { ...alerts };
+      delete nextAlerts[slotId];
+      return nextAlerts;
+    });
   };
 
   const handleExportScannerMetrics = () => {
@@ -3808,7 +3837,8 @@ export default function ScannerPage() {
         >
           {cameraSlots.map((slot, index) => {
             const slotLabel = getCameraSlotLabel(slot, index);
-            const isAlertSlot = activeAlertMatch?.cameraId === slot.id;
+            const activeSlotAlert = activeAlertMatchesBySlot[slot.id];
+            const isAlertSlot = Boolean(activeSlotAlert);
 
             return (
               <div
@@ -3907,7 +3937,7 @@ export default function ScannerPage() {
                     <span>Add</span>
                   </button>
                 )}
-                {isAlertSlot && activeAlertMatch && (
+                {isAlertSlot && activeSlotAlert && (
                   <div className="scanner-alert-card absolute inset-1.5 z-30 bg-red-600 border-2 border-red-400 rounded-xl p-2.5 sm:p-4 shadow-2xl flex flex-col justify-between text-center overflow-hidden">
                     <div className="flex items-center justify-between border-b border-red-500/80 pb-2">
                       <div className="flex items-center gap-2 min-w-0">
@@ -3920,7 +3950,11 @@ export default function ScannerPage() {
                         onClick={(event) => {
                           event.stopPropagation();
                           runtimeMetricsRef.current.falseAlertCount++;
-                          setActiveAlertMatch(null);
+                          setActiveAlertMatchesBySlot((alerts) => {
+                            const nextAlerts = { ...alerts };
+                            delete nextAlerts[slot.id];
+                            return nextAlerts;
+                          });
                         }}
                         className="p-1 rounded-lg bg-red-700 hover:bg-red-800 text-white transition-all"
                         title={t('closeBtn')}
@@ -3934,13 +3968,13 @@ export default function ScannerPage() {
                         <div>
                           <span className="text-[9px] text-red-100 font-bold uppercase block">{t('plateNumber')}</span>
                           <span className="plate-yellow text-base sm:text-xl font-mono font-black">
-                            {activeAlertMatch.vehicle.plate}
+                            {activeSlotAlert.vehicle.plate}
                           </span>
                         </div>
                         <div>
                           <span className="text-[9px] text-red-100 font-bold uppercase block">{t('outstandingAmount')}</span>
                           <span className="text-base sm:text-lg font-mono font-black text-white">
-                            {formatMYR(activeAlertMatch.vehicle.outstandingAmount)}
+                            {formatMYR(activeSlotAlert.vehicle.outstandingAmount)}
                           </span>
                         </div>
                       </div>
@@ -3949,12 +3983,12 @@ export default function ScannerPage() {
                         <div>
                           <span className="text-red-100 block">{t('vehicleDetails')}</span>
                           <strong className="text-white truncate block">
-                            {activeAlertMatch.vehicle.brand} {activeAlertMatch.vehicle.model}
+                            {activeSlotAlert.vehicle.brand} {activeSlotAlert.vehicle.model}
                           </strong>
                         </div>
                         <div>
                           <span className="text-red-100 block">{language === 'BM' ? 'Kamera' : 'Camera'}</span>
-                          <strong className="text-white truncate block">{activeAlertMatch.cameraName}</strong>
+                          <strong className="text-white truncate block">{activeSlotAlert.cameraName}</strong>
                         </div>
                       </div>
                     </div>
@@ -3963,7 +3997,7 @@ export default function ScannerPage() {
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
-                          handleMarkAsSeen();
+                          handleMarkAsSeen(slot.id);
                         }}
                         className="btn-mark-seen px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-red-600 text-[10px] sm:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1 shadow-md transition-all"
                       >

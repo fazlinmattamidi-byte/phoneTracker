@@ -73,6 +73,8 @@ export interface HistoryLog {
   timestamp: string;
   statusMatch?: 'EXACT' | 'POSSIBLE' | 'NONE';
   note?: string;
+  cameraId?: string;
+  cameraName?: string;
   actorId?: string;
   actorName?: string;
 }

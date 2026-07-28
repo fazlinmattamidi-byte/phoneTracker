@@ -62,8 +62,9 @@ export default function HistoryPage() {
     const p = (h.plate || '').toLowerCase();
     const act = h.action.toLowerCase();
     const det = h.details.toLowerCase();
+    const camera = `${h.cameraId || ''} ${h.cameraName || ''}`.toLowerCase();
 
-    const matchesSearch = !searchQuery || p.includes(q) || act.includes(q) || det.includes(q);
+    const matchesSearch = !searchQuery || p.includes(q) || act.includes(q) || det.includes(q) || camera.includes(q);
     return matchesType && matchesStatus && matchesSearch;
   });
 
@@ -86,13 +87,13 @@ export default function HistoryPage() {
   const startIndex = (safeCurrentPage - 1) * pageSize;
   const paginatedLogs = filteredLogs.slice(startIndex, startIndex + pageSize);
   const handleExportVisibleHistory = () => {
-    const headers = 'ID,Type,Action,Plate,Details,Actor,Timestamp,MatchStatus\n';
+    const headers = 'ID,Type,Action,Plate,Details,Actor,Timestamp,MatchStatus,CameraID,CameraName\n';
     const rows = filteredLogs
       .map(
         (h) =>
           `"${h.id}","${h.type}","${h.action}","${h.plate || ''}","${h.details}","${h.actorName || h.userRole}","${formatDate(
             h.timestamp
-          )}","${h.statusMatch || ''}"`
+          )}","${h.statusMatch || ''}","${h.cameraId || ''}","${h.cameraName || ''}"`
       )
       .join('\n');
     downloadCSV(createHistoryExportFileName(role), headers + rows);
@@ -289,6 +290,11 @@ export default function HistoryPage() {
                       </span>
                     )}
                     <p className="text-xs text-slate-200 font-sans font-medium leading-relaxed">{log.note || log.details}</p>
+                    {(log.cameraName || log.cameraId) && (
+                      <p className="text-[10px] font-mono text-slate-500">
+                        {log.cameraName || log.cameraId}
+                      </p>
+                    )}
                   </div>
 
                   {/* Footer: Role */}
@@ -358,7 +364,12 @@ export default function HistoryPage() {
                         )}
                       </td>
                       <td className="py-3 px-4 font-sans text-slate-200 font-medium">
-                        {log.note || log.details || <span className="text-slate-600 italic">-</span>}
+                        <div>{log.note || log.details || <span className="text-slate-600 italic">-</span>}</div>
+                        {(log.cameraName || log.cameraId) && (
+                          <div className="mt-1 font-mono text-[10px] text-slate-500">
+                            {log.cameraName || log.cameraId}
+                          </div>
+                        )}
                       </td>
                       {showRoleColumn && (
                         <td className="py-3 px-4 text-slate-400 text-[11px]">{log.userRole}</td>
