@@ -38,6 +38,7 @@ import {
 import {
   generateAdaptiveCrops,
   createInnerPlateTextCrop,
+  cropDeskewedCanvasRegionFast,
   cropCanvasRegionFast,
   prioritiseTracks,
   releaseCanvasMemory,
@@ -99,6 +100,7 @@ import {
   openDesktopCameraStream,
   rememberSelectedCamera,
   selectPreferredCamera,
+  streamNeedsReconnect,
 } from '@/lib/anpr/cameraManager';
 
 type AlertMatch = {
@@ -148,6 +150,28 @@ type DeviceTier = 'A' | 'B' | 'C' | 'D';
 type MotionBucket = 'NORMAL' | 'UNSTABLE' | 'COLLECT_ONLY' | 'PAUSED';
 
 type PerformanceMode = 'DESKTOP_STANDARD' | 'ADAPTIVE' | 'RECOVERY' | 'SURVIVAL';
+
+type ScannerReloadTriggerCode =
+  | 'SCHEDULED_REFRESH'
+  | 'STREAM_RECONNECT'
+  | 'CAMERA_FPS_DROP'
+  | 'DETECTOR_SLOWDOWN'
+  | 'OCR_QUEUE_BACKLOG'
+  | 'MEMORY_GROWTH';
+
+type ScannerReloadTrigger = {
+  code: ScannerReloadTriggerCode;
+  message: string;
+  confirmationMs: number;
+};
+
+type ScannerReloadNotice = {
+  isReloading: boolean;
+  reason: string;
+  startedAt: number;
+  completedAt?: number;
+  count: number;
+};
 
 type ScannerRuntimeMetrics = {
   sessionStartedAt: number;
@@ -982,6 +1006,7 @@ const OCR_MAX_CONCURRENCY = 4;
 const OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE = 0.50;
 const OCR_QUICK_DB_MIN_SCORE = 0.58;
 const OCR_QUICK_DB_MIN_CONFIDENCE = 0.26;
+const OCR_DESKEW_MIN_ANGLE_RAD = 0.055;
 const MOTION_NORMAL_MAX = 0.15;
 const MOTION_UNSTABLE_MAX = 0.30;
 const MOTION_COLLECT_ONLY_MAX = 0.50;
@@ -995,6 +1020,16 @@ const PERFORMANCE_RECOVERY_COOLDOWN_MS = 45000;
 const CAMERA_CONSTRAINT_APPLY_COOLDOWN_MS = 10000;
 const ENVIRONMENT_SAMPLE_INTERVAL_MS = 1200;
 const DATASET_SAMPLE_LIMIT = 250;
+const MOBILE_SCANNER_PREVENTIVE_REFRESH_MS = 20 * 60 * 1000;
+const MOBILE_SCANNER_RELOAD_MIN_UPTIME_MS = 90 * 1000;
+const MOBILE_SCANNER_RELOAD_COOLDOWN_MS = 2 * 60 * 1000;
+const MOBILE_SCANNER_RELOAD_NOTICE_MS = 3500;
+const MOBILE_SCANNER_ISSUE_CONFIRM_MS = 12 * 1000;
+const MOBILE_SCANNER_STREAM_CONFIRM_MS = 2500;
+const MOBILE_SCANNER_STREAM_COOLDOWN_MS = 15000;
+const MOBILE_SCANNER_LOW_FPS_THRESHOLD = 7;
+const MOBILE_SCANNER_MEMORY_GROWTH_PERCENT = 18;
+const MOBILE_SCANNER_OCR_QUEUE_DEPTH = 6;
 
 type MotionOcrMode = MotionBucket;
 type OcrQueuePressure = 'EMPTY' | 'MODERATE' | 'LARGE' | 'CRITICAL';
@@ -1335,6 +1370,86 @@ function canRunMultiCameraOnCurrentDevice(): boolean {
   return !phoneLikeUserAgent && !narrowViewport;
 }
 
+function isMobileScannerDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  const userAgent = navigator.userAgent || '';
+  const phoneLikeUserAgent = /Mobi|Android|iPhone|iPod|iPad|Windows Phone/i.test(userAgent);
+  const narrowViewport = window.matchMedia('(max-width: 767px)').matches;
+
+  return phoneLikeUserAgent || narrowViewport;
+}
+
+function getMobileScannerReloadTrigger(
+  snapshot: ScannerMetricsSnapshot,
+  detectorFps: number,
+  cameraFps: number,
+  streams: MediaStream[],
+  lastReloadAt: number,
+  now: number
+): ScannerReloadTrigger | null {
+  if (streams.some(streamNeedsReconnect)) {
+    return {
+      code: 'STREAM_RECONNECT',
+      message: 'Camera stream stalled',
+      confirmationMs: MOBILE_SCANNER_STREAM_CONFIRM_MS,
+    };
+  }
+
+  const lastRefreshAt = lastReloadAt || snapshot.sessionStartedAt;
+  if (now - lastRefreshAt >= MOBILE_SCANNER_PREVENTIVE_REFRESH_MS) {
+    return {
+      code: 'SCHEDULED_REFRESH',
+      message: 'Preventive mobile scanner refresh',
+      confirmationMs: 0,
+    };
+  }
+
+  if (cameraFps > 0 && cameraFps < MOBILE_SCANNER_LOW_FPS_THRESHOLD && detectorFps < 2) {
+    return {
+      code: 'CAMERA_FPS_DROP',
+      message: 'Camera FPS dropped',
+      confirmationMs: MOBILE_SCANNER_ISSUE_CONFIRM_MS,
+    };
+  }
+
+  const detectorTargetMs = getTierDetectorTargetMs(snapshot.deviceTier);
+  const detectorTooSlow =
+    snapshot.detectorLatencySamples >= 20 &&
+    snapshot.detectorLatencyP95Ms > Math.max(650, detectorTargetMs * 3);
+  if (detectorTooSlow) {
+    return {
+      code: 'DETECTOR_SLOWDOWN',
+      message: 'Scanner processing slowed down',
+      confirmationMs: MOBILE_SCANNER_ISSUE_CONFIRM_MS,
+    };
+  }
+
+  const ocrBacklog =
+    snapshot.ocrLatencySamples >= 6 &&
+    snapshot.lastOcrQueueDepth >= MOBILE_SCANNER_OCR_QUEUE_DEPTH &&
+    snapshot.ocrLatencyP95Ms > 900;
+  if (ocrBacklog) {
+    return {
+      code: 'OCR_QUEUE_BACKLOG',
+      message: 'OCR queue backed up',
+      confirmationMs: MOBILE_SCANNER_ISSUE_CONFIRM_MS,
+    };
+  }
+
+  if (
+    typeof snapshot.memoryGrowthPercent === 'number' &&
+    snapshot.memoryGrowthPercent >= MOBILE_SCANNER_MEMORY_GROWTH_PERCENT
+  ) {
+    return {
+      code: 'MEMORY_GROWTH',
+      message: 'Mobile browser memory grew',
+      confirmationMs: MOBILE_SCANNER_ISSUE_CONFIRM_MS,
+    };
+  }
+
+  return null;
+}
+
 function mapVehicleToCase(vehicle: Vehicle): VehicleCase {
   const normalizedPlate = cleanPlateNumber(vehicle.plate);
 
@@ -1400,6 +1515,10 @@ export default function ScannerPage() {
   const lastCameraConstraintApplyAtRef = useRef(0);
   const stopCameraRef = useRef<(options?: { preserveScanningState?: boolean }) => void>(() => undefined);
   const startVisibleCamerasRef = useRef<(options?: { resumeScanning?: boolean }) => Promise<boolean>>(async () => false);
+  const scannerReloadInFlightRef = useRef(false);
+  const lastScannerReloadAtRef = useRef(0);
+  const scannerReloadIssueRef = useRef<{ code: ScannerReloadTriggerCode; firstSeenAt: number } | null>(null);
+  const scannerReloadNoticeTimerRef = useRef<number | null>(null);
 
   const [availableCameras, setAvailableCameras] = useState<DesktopCameraDevice[]>([]);
   const [cameraSlots, setCameraSlots] = useState<CameraSlot[]>([{ id: 'camera-slot-1', deviceId: '' }]);
@@ -1409,6 +1528,7 @@ export default function ScannerPage() {
   const [cameraMetadataBySlot, setCameraMetadataBySlot] = useState<Record<string, CameraRuntimeMetadata>>({});
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [scannerReloadNotice, setScannerReloadNotice] = useState<ScannerReloadNotice | null>(null);
   const [cameraError, setCameraError] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [developerMode, setDeveloperMode] = useState(false);
@@ -1534,6 +1654,117 @@ export default function ScannerPage() {
     [applyActiveCameraConstraints]
   );
 
+  const clearScannerReloadNoticeTimer = useCallback(() => {
+    if (scannerReloadNoticeTimerRef.current) {
+      window.clearTimeout(scannerReloadNoticeTimerRef.current);
+      scannerReloadNoticeTimerRef.current = null;
+    }
+  }, []);
+
+  const requestScannerOnlyReload = useCallback(
+    async (trigger: ScannerReloadTrigger) => {
+      if (scannerReloadInFlightRef.current || !isScanningRef.current) return false;
+
+      scannerReloadInFlightRef.current = true;
+      scannerReloadIssueRef.current = null;
+      clearScannerReloadNoticeTimer();
+
+      const startedAt = Date.now();
+      lastScannerReloadAtRef.current = startedAt;
+      setCurrentPlate('RELOADING');
+      setScannerReloadNotice((prev) => ({
+        isReloading: true,
+        reason: trigger.message,
+        startedAt,
+        count: (prev?.count ?? 0) + 1,
+      }));
+
+      try {
+        const started = await startVisibleCamerasRef.current({ resumeScanning: true });
+        const completedAt = Date.now();
+
+        if (!started) {
+          setIsScanning(false);
+          setCurrentPlate('READY');
+        } else {
+          setCurrentPlate('SCANNING');
+        }
+
+        setScannerReloadNotice((prev) =>
+          prev?.startedAt === startedAt
+            ? {
+                ...prev,
+                isReloading: false,
+                completedAt,
+              }
+            : prev
+        );
+
+        scannerReloadNoticeTimerRef.current = window.setTimeout(() => {
+          setScannerReloadNotice((prev) => (prev && !prev.isReloading ? null : prev));
+          scannerReloadNoticeTimerRef.current = null;
+        }, MOBILE_SCANNER_RELOAD_NOTICE_MS);
+
+        return started;
+      } finally {
+        scannerReloadInFlightRef.current = false;
+      }
+    },
+    [clearScannerReloadNoticeTimer]
+  );
+
+  const maybeAutoReloadMobileScanner = useCallback(
+    (snapshot: ScannerMetricsSnapshot, detectorFps: number, cameraFps: number) => {
+      if (!isScanningRef.current || !isCameraReadyRef.current || !isMobileScannerDevice()) {
+        scannerReloadIssueRef.current = null;
+        return;
+      }
+
+      if (scannerReloadInFlightRef.current) return;
+
+      const now = Date.now();
+      const streams = Object.values(activeStreamsRef.current);
+      if (streams.length === 0) return;
+
+      const trigger = getMobileScannerReloadTrigger(
+        snapshot,
+        detectorFps,
+        cameraFps,
+        streams,
+        lastScannerReloadAtRef.current,
+        now
+      );
+
+      if (!trigger) {
+        scannerReloadIssueRef.current = null;
+        return;
+      }
+
+      const freshScannerRuntime =
+        now - Math.max(snapshot.sessionStartedAt, lastScannerReloadAtRef.current || 0) < MOBILE_SCANNER_RELOAD_MIN_UPTIME_MS;
+      if (freshScannerRuntime && trigger.code !== 'STREAM_RECONNECT') return;
+
+      const reloadCooldownMs =
+        trigger.code === 'STREAM_RECONNECT' ? MOBILE_SCANNER_STREAM_COOLDOWN_MS : MOBILE_SCANNER_RELOAD_COOLDOWN_MS;
+      if (lastScannerReloadAtRef.current && now - lastScannerReloadAtRef.current < reloadCooldownMs) return;
+
+      const existingIssue = scannerReloadIssueRef.current;
+      if (!existingIssue || existingIssue.code !== trigger.code) {
+        scannerReloadIssueRef.current = {
+          code: trigger.code,
+          firstSeenAt: now,
+        };
+        if (trigger.confirmationMs > 0) return;
+      }
+
+      const issueFirstSeenAt = scannerReloadIssueRef.current?.firstSeenAt ?? now;
+      if (now - issueFirstSeenAt < trigger.confirmationMs) return;
+
+      void requestScannerOnlyReload(trigger);
+    },
+    [requestScannerOnlyReload]
+  );
+
   const flushScannerMetrics = useCallback(() => {
     const metrics = Object.values(slotMetricsRef.current);
     const aggregate = metrics.reduce(
@@ -1564,12 +1795,13 @@ export default function ScannerPage() {
     const adaptedSnapshot = createMetricsSnapshot(runtimeMetricsRef.current, aggregate.tracks);
     setRuntimeMetricsSnapshot(adaptedSnapshot);
     setSystemHealthSnapshot(createSystemHealthSnapshot(adaptedSnapshot, aggregate.detFrames, aggregate.camFrames));
+    maybeAutoReloadMobileScanner(adaptedSnapshot, aggregate.detFrames, aggregate.camFrames);
 
     Object.values(slotMetricsRef.current).forEach((item) => {
       item.camFrames = 0;
       item.detFrames = 0;
     });
-  }, [maybeAdaptRuntimePerformance]);
+  }, [maybeAdaptRuntimePerformance, maybeAutoReloadMobileScanner]);
 
   const resetLiveScanUi = useCallback(() => {
     Object.values(slotRuntimesRef.current).forEach((runtime) => {
@@ -1749,6 +1981,12 @@ export default function ScannerPage() {
   });
 
   useEffect(() => {
+    return () => {
+      clearScannerReloadNoticeTimer();
+    };
+  }, [clearScannerReloadNoticeTimer]);
+
+  useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
       try {
         const storedDetections = localStorage.getItem(RECENT_DETECTIONS_STORAGE_KEY);
@@ -1821,10 +2059,13 @@ export default function ScannerPage() {
       stream.getTracks().forEach((track) => track.stop());
     });
     activeStreamsRef.current = {};
+    scannerReloadIssueRef.current = null;
     setPreviewSlotIds([]);
     setCameraMetadataBySlot({});
     setIsCameraReady(false);
     if (!options.preserveScanningState) {
+      clearScannerReloadNoticeTimer();
+      setScannerReloadNotice(null);
       setIsScanning(false);
     }
     resetLiveScanUi();
@@ -1930,6 +2171,9 @@ export default function ScannerPage() {
     setPreviewSlotIds((ids) => ids.filter((id) => id !== slotId));
     handleSelectActiveSlot(slotId);
     if (isScanning) {
+      scannerReloadIssueRef.current = null;
+      clearScannerReloadNoticeTimer();
+      setScannerReloadNotice(null);
       setIsScanning(false);
       resetLiveScanUi();
       setCurrentPlate('READY');
@@ -1943,12 +2187,17 @@ export default function ScannerPage() {
         void startRuntimeInit();
       }
       resetLiveScanUi();
+      lastScannerReloadAtRef.current = Date.now();
+      scannerReloadIssueRef.current = null;
       setCurrentPlate('SCANNING');
       setIsScanning(true);
     }
   };
 
   const handlePauseScanning = () => {
+    scannerReloadIssueRef.current = null;
+    clearScannerReloadNoticeTimer();
+    setScannerReloadNotice(null);
     setIsScanning(false);
     resetLiveScanUi();
     setCurrentPlate('PAUSED');
@@ -2537,10 +2786,17 @@ export default function ScannerPage() {
           const sourceScaleX = video.videoWidth / Math.max(1, processingCanvas.width);
           const sourceScaleY = video.videoHeight / Math.max(1, processingCanvas.height);
           const sourceBbox = scaleBoundingBox(track.bbox, sourceScaleX, sourceScaleY);
-          const cropCanvas = cropCanvasRegionFast(video, sourceBbox);
+          const cropAngle = track.overlayAngle ?? 0;
+          const shouldDeskewCrop = Math.abs(cropAngle) >= OCR_DESKEW_MIN_ANGLE_RAD;
+          const cropCanvas = shouldDeskewCrop
+            ? cropDeskewedCanvasRegionFast(video, sourceBbox, cropAngle)
+            : cropCanvasRegionFast(video, sourceBbox);
+          const perspectiveScore = shouldDeskewCrop
+            ? Math.max(0.62, 1 - Math.abs(cropAngle) / (MAX_OVERLAY_TILT_RAD * 2.6))
+            : Math.max(0, 1 - Math.abs(cropAngle) / MAX_OVERLAY_TILT_RAD);
           const cropQuality = runtime.bestFrameSelector.addCropCandidate(track.trackNumber, cropCanvas, sourceBbox, {
             trackStability: track.trackConfidence ?? 0.55,
-            perspectiveScore: Math.max(0, 1 - Math.abs(track.overlayAngle ?? 0) / MAX_OVERLAY_TILT_RAD),
+            perspectiveScore,
           });
           const nextBestId = runtime.bestFrameSelector.getBestCrop(track.trackNumber)?.id;
           if (previousBestId && nextBestId && previousBestId !== nextBestId) {
@@ -3445,13 +3701,19 @@ export default function ScannerPage() {
   };
 
   const runtimeReady = isRuntimeScanningReady(runtimeState);
+  const scannerReloadActive = Boolean(scannerReloadNotice?.isReloading);
+  const scannerReloadComplete = Boolean(scannerReloadNotice && !scannerReloadNotice.isReloading);
   const visibleTrack = tracksList.find((track) => getTrackPlateText(track)) || tracksList[0] || null;
   const activeScanTileCount = supportsMultiCameraScan
     ? cameraSlots.filter((slot) => previewSlotIds.includes(slot.id)).length
     : previewSlotIds.includes(activeCameraSlotId)
       ? 1
       : 0;
-  const scannerStatusText = cameraError
+  const scannerStatusText = scannerReloadActive
+    ? 'Scanner reloading - camera stream is being refreshed'
+    : scannerReloadComplete
+    ? 'Scanner refreshed and scanning resumed'
+    : cameraError
     ? 'Camera unavailable'
     : isScanning && runtimeReady && supportsMultiCameraScan
     ? `Scanning ${activeScanTileCount || 1} camera${(activeScanTileCount || 1) === 1 ? '' : 's'}${visibleTrack ? ` - ${getTrackStatusLabel(visibleTrack)}` : ''}`
@@ -3485,6 +3747,14 @@ export default function ScannerPage() {
     ? language === 'BM'
       ? 'Kamera perlu disemak'
       : 'Camera needs attention'
+    : scannerReloadActive
+    ? language === 'BM'
+      ? 'Pengimbas dimuat semula'
+      : 'Scanner reloading'
+    : scannerReloadComplete
+    ? language === 'BM'
+      ? 'Pengimbas disegar'
+      : 'Scanner refreshed'
     : isScanning && runtimeReady
     ? language === 'BM'
       ? 'Sedang mengimbas'
@@ -3502,6 +3772,14 @@ export default function ScannerPage() {
     : 'Choose camera';
   const simpleScannerHint = cameraError
     ? cameraError
+    : scannerReloadActive
+    ? language === 'BM'
+      ? 'Kamera pengimbas sedang disambung semula. Aplikasi tidak dimuat semula.'
+      : 'Refreshing the scanner camera only. The app stays open.'
+    : scannerReloadComplete
+    ? language === 'BM'
+      ? `${scannerReloadNotice?.reason || 'Pengimbas disegar'}; imbasan disambung semula.`
+      : `${scannerReloadNotice?.reason || 'Scanner refreshed'}; scanning has resumed.`
     : isScanning
     ? language === 'BM'
       ? 'Biarkan kamera aktif. Sistem akan terus mencari nombor plat.'
@@ -3878,6 +4156,22 @@ export default function ScannerPage() {
                   }}
                   className="absolute inset-0 z-10 h-full w-full object-cover pointer-events-none"
                 />
+
+                {scannerReloadActive && (
+                  <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/75 px-6 text-center backdrop-blur-sm">
+                    <div className="rounded-xl border border-cyan-800 bg-slate-950/90 px-4 py-3 shadow-xl">
+                      <RefreshCw className="mx-auto h-5 w-5 animate-spin text-cyan-300" />
+                      <div className="mt-2 text-xs font-black uppercase tracking-wider text-white">
+                        {language === 'BM' ? 'Pengimbas dimuat semula' : 'Scanner reloading'}
+                      </div>
+                      <div className="mt-1 max-w-[220px] text-[10px] font-semibold text-slate-400">
+                        {language === 'BM'
+                          ? 'Kamera disambung semula. Aplikasi kekal terbuka.'
+                          : 'Camera reconnecting. The app stays open.'}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="absolute inset-x-2.5 top-2.5 z-20 flex items-center gap-1.5">
                   <select

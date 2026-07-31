@@ -631,6 +631,55 @@ export function cropCanvasRegionFast(
   return cropCanvas;
 }
 
+export function cropDeskewedCanvasRegionFast(
+  sourceCanvas: HTMLCanvasElement | HTMLVideoElement,
+  bbox: BoundingBox,
+  angleRad: number,
+  targetWidth: number = 360,
+  targetHeight: number = 108
+): HTMLCanvasElement {
+  const boundedAngle = Number.isFinite(angleRad) ? clamp(angleRad, -0.52, 0.52) : 0;
+  if (Math.abs(boundedAngle) < 0.035) {
+    return cropCanvasRegionFast(sourceCanvas, bbox, targetWidth, targetHeight);
+  }
+
+  const cropCanvas = document.createElement('canvas');
+  const outputSize = getAdaptiveCropTargetSize(bbox, targetWidth, targetHeight);
+
+  let scaleFactor = 1.0;
+  if (bbox.width < 120 || bbox.height < 35) {
+    scaleFactor = 1.6;
+  }
+
+  const scaledW = Math.round(outputSize.width * scaleFactor);
+  const scaledH = Math.round(outputSize.height * scaleFactor);
+  cropCanvas.width = scaledW;
+  cropCanvas.height = scaledH;
+
+  const ctx = cropCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return cropCanvas;
+
+  const { width: sourceWidth, height: sourceHeight } = getSourceDimensions(sourceCanvas);
+  const angleAmount = Math.abs(boundedAngle);
+  const cropBox = clampCropBox(
+    bbox,
+    sourceWidth,
+    sourceHeight,
+    0.12 + Math.min(0.20, angleAmount * 0.42),
+    0.18 + Math.min(0.24, angleAmount * 0.52)
+  );
+
+  ctx.fillStyle = 'rgb(0, 0, 0)';
+  ctx.fillRect(0, 0, scaledW, scaledH);
+  ctx.save();
+  ctx.translate(scaledW / 2, scaledH / 2);
+  ctx.rotate(-boundedAngle);
+  ctx.drawImage(sourceCanvas, cropBox.x, cropBox.y, cropBox.width, cropBox.height, -scaledW / 2, -scaledH / 2, scaledW, scaledH);
+  ctx.restore();
+
+  return cropCanvas;
+}
+
 export function createInnerPlateTextCrop(sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
   const output = document.createElement('canvas');
   output.width = sourceCanvas.width;
