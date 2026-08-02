@@ -40,13 +40,13 @@ export const TopHeader: React.FC = () => {
   if (pathname === '/login') return null;
 
   return (
-    <header className="app-header sticky top-0 z-40 w-full backdrop-blur-md bg-slate-900/90 border-b border-cyan-900/40 px-3 sm:px-4 py-2 sm:py-2.5 shadow-lg">
-      <div className="max-w-[1480px] mx-auto flex items-center justify-between gap-2 sm:gap-4">
+    <header className="app-header sticky top-0 z-40 w-full backdrop-blur-md bg-slate-900/90 border-b border-cyan-900/40 px-4 sm:px-5 py-2.5 shadow-lg">
+      <div className="max-w-[1480px] mx-auto flex items-center justify-between gap-3 sm:gap-4">
         {/* Brand & Subtitle */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
 
-          <Link href="/" className="flex items-center gap-2 sm:gap-2.5 group">
-            <div className="mode-logo-frame w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-slate-950 flex items-center justify-center shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-all duration-300 border border-cyan-400/40 overflow-hidden shrink-0">
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <div className="mode-logo-frame w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-slate-950 flex items-center justify-center shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-all duration-300 border border-cyan-400/40 overflow-hidden shrink-0">
               <Image
                 src="/logo.png"
                 alt="TRACK Logo"
@@ -58,7 +58,7 @@ export const TopHeader: React.FC = () => {
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="text-lg sm:text-xl font-black tracking-wider text-white">
+                <span className="text-xl font-black tracking-wider text-white">
                   TRACK
                 </span>
               </div>
@@ -70,7 +70,7 @@ export const TopHeader: React.FC = () => {
         </div>
 
         {/* Controls: Language, Theme, Profile Menu */}
-        <div className="flex items-center gap-1 sm:gap-2.5">
+        <div className="flex items-center gap-1.5 sm:gap-2.5">
           {/* Language Switcher */}
           <button
             onClick={() => setLanguage(language === 'BM' ? 'EN' : 'BM')}

@@ -41,7 +41,7 @@ export default function RootLayout({
           <TopHeader />
           <div className="app-shell flex flex-1 w-full min-w-0">
             <Sidebar />
-            <main className="app-main flex-1 min-w-0 w-full max-w-[1480px] mx-auto p-3 sm:p-5 md:p-6 xl:p-8 pb-24 lg:pb-8 overflow-x-hidden">
+            <main className="app-main flex-1 min-w-0 w-full max-w-[1480px] mx-auto px-4 pt-5 pb-28 sm:px-5 sm:pt-5 sm:pb-28 md:px-6 md:pt-6 md:pb-28 lg:p-6 xl:p-8 lg:pb-8 overflow-x-hidden">
               {children}
             </main>
           </div>

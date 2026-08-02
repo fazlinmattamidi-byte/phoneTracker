@@ -21,15 +21,16 @@ import { cn } from '@/lib/utils';
 
 export const BottomNav: React.FC = () => {
   const pathname = usePathname();
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const { role } = useAuth();
   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
+  const isMalay = language === 'BM';
 
   const mainTabs = [
-    { label: t('navDashboard'), href: '/', icon: LayoutDashboard },
-    { label: t('navSearch'), href: '/search', icon: Search },
-    { label: t('navScanner'), href: '/scanner', icon: Camera, isScannerBtn: true },
-    { label: t('navHistory'), href: '/history', icon: History },
+    { label: t('navDashboard'), shortLabel: isMalay ? 'Papan' : 'Home', href: '/', icon: LayoutDashboard },
+    { label: t('navSearch'), shortLabel: isMalay ? 'Cari' : 'Search', href: '/search', icon: Search },
+    { label: t('navScanner'), shortLabel: isMalay ? 'Imbas' : 'Scan', href: '/scanner', icon: Camera, isScannerBtn: true },
+    { label: t('navHistory'), shortLabel: isMalay ? 'Audit' : 'Audit', href: '/history', icon: History },
   ];
 
   const moreItems = [
@@ -44,7 +45,7 @@ export const BottomNav: React.FC = () => {
   return (
     <>
       {/* Mobile Bottom Bar */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-cyan-900/40 px-1.5 sm:px-4 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-between shadow-2xl">
+      <nav className="lg:hidden fixed left-3 right-3 bottom-3 z-40 grid grid-cols-5 items-end gap-1 rounded-2xl border border-cyan-900/50 bg-slate-950/95 px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-2xl backdrop-blur-lg sm:left-4 sm:right-4">
         {mainTabs.map((tab) => {
           const isActive = pathname === tab.href;
           const Icon = tab.icon;
@@ -54,15 +55,16 @@ export const BottomNav: React.FC = () => {
               <Link
                 key={tab.href}
                 href={tab.href}
-                className="relative -top-2.5 flex flex-col items-center group shrink-0 px-0.5"
+                aria-label={tab.label}
+                className="w-full min-w-0 flex flex-col items-center justify-center rounded-xl py-1 text-cyan-400 transition-colors group"
               >
-                <div className="w-11 h-11 rounded-full bg-cyan-600 p-0.5 shadow-xl shadow-cyan-500/30 group-active:scale-95 transition-transform border border-cyan-300/40 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-full bg-cyan-600 p-0.5 shadow-lg shadow-cyan-500/25 group-active:scale-95 transition-transform border border-cyan-300/40 flex items-center justify-center">
                   <div className="w-full h-full rounded-full bg-slate-950 flex items-center justify-center">
-                    <Camera className="w-4.5 h-4.5 text-cyan-400 animate-pulse" />
+                    <Camera className="w-4.5 h-4.5 text-cyan-400" />
                   </div>
                 </div>
-                <span className="text-[8.5px] sm:text-[9.5px] font-bold text-cyan-400 mt-1 text-center leading-none whitespace-nowrap tracking-tighter">
-                  {tab.label}
+                <span className="mt-1 text-[10px] font-bold leading-none text-center whitespace-nowrap">
+                  {tab.shortLabel}
                 </span>
               </Link>
             );
@@ -72,13 +74,14 @@ export const BottomNav: React.FC = () => {
             <Link
               key={tab.href}
               href={tab.href}
+              aria-label={tab.label}
               className={cn(
-                'flex flex-col items-center justify-center py-1 px-1 rounded-lg transition-colors flex-1 min-w-0',
-                isActive ? 'text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+                'w-full min-w-0 flex flex-col items-center justify-center rounded-xl py-2 transition-colors',
+                isActive ? 'bg-slate-900/80 text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
               )}
             >
               <Icon className="w-4.5 h-4.5 shrink-0" />
-              <span className="text-[8.5px] sm:text-[9.5px] leading-none mt-1 text-center whitespace-nowrap tracking-tighter">{tab.label}</span>
+              <span className="mt-1 text-[10px] leading-none text-center whitespace-nowrap">{tab.shortLabel}</span>
             </Link>
           );
         })}
@@ -86,12 +89,13 @@ export const BottomNav: React.FC = () => {
         {/* More Drawer Button */}
         <button
           onClick={() => setShowMoreDrawer(true)}
+          aria-label={t('moreMenu')}
           className={cn(
-            'flex flex-col items-center justify-center py-1 px-1 rounded-lg text-slate-400 hover:text-slate-200 transition-colors flex-1 min-w-0'
+            'w-full min-w-0 flex flex-col items-center justify-center rounded-xl py-2 text-slate-400 hover:text-slate-200 transition-colors'
           )}
         >
           <MoreHorizontal className="w-4.5 h-4.5 shrink-0" />
-          <span className="text-[8.5px] sm:text-[9.5px] leading-none mt-1 text-center whitespace-nowrap tracking-tighter">{t('moreMenu')}</span>
+          <span className="mt-1 text-[10px] leading-none text-center whitespace-nowrap">{t('moreMenu')}</span>
         </button>
       </nav>
 

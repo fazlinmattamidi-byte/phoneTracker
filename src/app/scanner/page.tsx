@@ -17,7 +17,6 @@ import {
   CheckCircle2,
   Download,
   MapPin,
-  Pause,
   Play,
   Plus,
   RefreshCw,
@@ -171,6 +170,11 @@ type ScannerReloadNotice = {
   startedAt: number;
   completedAt?: number;
   count: number;
+};
+
+type CameraStopOptions = {
+  preserveScanningState?: boolean;
+  invalidatePendingStarts?: boolean;
 };
 
 type ScannerRuntimeMetrics = {
@@ -392,16 +396,25 @@ function getExecutionModeLabel(): string {
   return 'WebGPU -> WASM';
 }
 
-function getCameraProfileValues(adaptationLevel = 0): { width: number; height: number; fps: number } {
+function getCameraProfileValues(
+  adaptationLevel = 0,
+  mobileOptimized = false
+): { width: number; height: number; fps: number } {
+  if (mobileOptimized) {
+    if (adaptationLevel >= 3) return { width: 854, height: 480, fps: 20 };
+    if (adaptationLevel >= 2) return { width: 960, height: 540, fps: 24 };
+    return { width: 1280, height: 720, fps: 24 };
+  }
+
   if (adaptationLevel >= 3) return { width: 1280, height: 720, fps: 24 };
   if (adaptationLevel >= 2) return { width: 1280, height: 720, fps: 30 };
   if (adaptationLevel >= 1) return { width: 1600, height: 900, fps: 30 };
   return { width: 1920, height: 1080, fps: 30 };
 }
 
-function getCameraProfileLabel(tier: DeviceTier, adaptationLevel = 0): string {
-  const { width, height, fps } = getCameraProfileValues(adaptationLevel);
-  return `${width}x${height} @ ${fps} FPS (Tier ${tier})`;
+function getCameraProfileLabel(tier: DeviceTier, adaptationLevel = 0, mobileOptimized = false): string {
+  const { width, height, fps } = getCameraProfileValues(adaptationLevel, mobileOptimized);
+  return `${width}x${height} @ ${fps} FPS (${mobileOptimized ? 'Phone Tier' : 'Tier'} ${tier})`;
 }
 
 function getProcessingProfileLabel(tier: DeviceTier, adaptationLevel = 0): string {
@@ -429,13 +442,14 @@ function applyRuntimePerformanceProfile(
 ): void {
   const boundedLevel = clampNumber(adaptationLevel, 0, 3);
   const effectiveTier = downgradeDeviceTier(baseTier, boundedLevel);
+  const mobileOptimized = isMobileScannerDevice();
   metrics.baseDeviceTier = baseTier;
   metrics.deviceTier = effectiveTier;
   metrics.adaptationLevel = boundedLevel;
   metrics.performanceMode = getPerformanceMode(baseTier, effectiveTier, boundedLevel);
   metrics.performanceModeReason = reason;
   metrics.executionMode = getExecutionModeLabel();
-  metrics.cameraProfile = getCameraProfileLabel(effectiveTier, boundedLevel);
+  metrics.cameraProfile = getCameraProfileLabel(effectiveTier, boundedLevel, mobileOptimized);
   metrics.processingProfile = getProcessingProfileLabel(effectiveTier, boundedLevel);
   metrics.ocrProfile = getOcrProfileLabel(effectiveTier, boundedLevel);
 }
@@ -471,6 +485,7 @@ function createInitialCameraHealth(): CameraHealthSnapshot {
 function createInitialRuntimeMetrics(deviceTier: DeviceTier = 'B'): ScannerRuntimeMetrics {
   const memoryBaselineMb = getUsedHeapMb();
   const initialEnvironment = createDefaultEnvironmentProfile();
+  const mobileOptimized = isMobileScannerDevice();
   const metrics: ScannerRuntimeMetrics = {
     sessionStartedAt: Date.now(),
     detectorLatencyTotalMs: 0,
@@ -506,7 +521,7 @@ function createInitialRuntimeMetrics(deviceTier: DeviceTier = 'B'): ScannerRunti
     performanceMode: getPerformanceMode(deviceTier, deviceTier, 0),
     performanceModeReason: 'Desktop baseline profile',
     executionMode: getExecutionModeLabel(),
-    cameraProfile: getCameraProfileLabel(deviceTier, 0),
+    cameraProfile: getCameraProfileLabel(deviceTier, 0, mobileOptimized),
     processingProfile: getProcessingProfileLabel(deviceTier, 0),
     ocrProfile: getOcrProfileLabel(deviceTier, 0),
     currentEnvironment: initialEnvironment.label,
@@ -815,13 +830,35 @@ function isSupportedDesktopScannerBrowser(): boolean {
   return isChromeOrEdge && isDesktopPlatform;
 }
 
-function getCameraPerformanceConstraints(adaptationLevel = 0): MediaTrackConstraints {
-  const { width, height, fps } = getCameraProfileValues(adaptationLevel);
+function getCameraPerformanceConstraints(
+  adaptationLevel = 0,
+  mobileOptimized = isMobileScannerDevice()
+): MediaTrackConstraints {
+  const { width, height, fps } = getCameraProfileValues(adaptationLevel, mobileOptimized);
 
   return {
     width: { ideal: width },
     height: { ideal: height },
     frameRate: { ideal: fps, max: 30 },
+  };
+}
+
+function getActiveCameraCaptureConfig(
+  cameraConfig: AdaptiveScannerConfig['camera'],
+  adaptationLevel = 0
+): AdaptiveScannerConfig['camera'] {
+  if (!isMobileScannerDevice()) return cameraConfig;
+
+  const profile = getCameraProfileValues(adaptationLevel, true);
+  const fallbackWidth = adaptationLevel >= 2 ? 854 : 960;
+  const fallbackHeight = adaptationLevel >= 2 ? 480 : 540;
+
+  return {
+    idealWidth: Math.min(cameraConfig.idealWidth, profile.width),
+    idealHeight: Math.min(cameraConfig.idealHeight, profile.height),
+    idealFps: Math.min(cameraConfig.idealFps, profile.fps),
+    fallbackWidth: Math.min(cameraConfig.fallbackWidth, fallbackWidth),
+    fallbackHeight: Math.min(cameraConfig.fallbackHeight, fallbackHeight),
   };
 }
 
@@ -1453,6 +1490,18 @@ function getMobileScannerReloadTrigger(
 function mapVehicleToCase(vehicle: Vehicle): VehicleCase {
   const normalizedPlate = cleanPlateNumber(vehicle.plate);
 
+  // Map the storage-layer Vehicle status to the VehicleCase CaseStatus used by
+  // the matching engine. Only CLOSED cases are excluded from DB matching.
+  // FLAGGED and PENDING are active pursuit cases — map them to ON_HOLD so the
+  // matching engine still finds them. CLEARED cases are treated as RECOVERED.
+  const statusMap: Record<string, VehicleCase['status']> = {
+    ACTIVE: 'ACTIVE',
+    FLAGGED: 'ON_HOLD',
+    PENDING: 'ON_HOLD',
+    CLEARED: 'RECOVERED',
+  };
+  const caseStatus: VehicleCase['status'] = statusMap[vehicle.status] ?? 'ACTIVE';
+
   return {
     id: vehicle.id,
     plateNumber: normalizedPlate,
@@ -1466,7 +1515,7 @@ function mapVehicleToCase(vehicle: Vehicle): VehicleCase {
     financeCompany: vehicle.financeCompany,
     outstandingAmount: vehicle.outstandingAmount,
     caseReference: vehicle.reference,
-    status: vehicle.status === 'ACTIVE' ? 'ACTIVE' : 'CLOSED',
+    status: caseStatus,
     notes: vehicle.remark,
     createdAt: vehicle.createdDate,
     updatedAt: vehicle.updatedDate,
@@ -1513,12 +1562,15 @@ export default function ScannerPage() {
   const environmentInferenceRunningRef = useRef(false);
   const lastPerformanceAdaptationAtRef = useRef(0);
   const lastCameraConstraintApplyAtRef = useRef(0);
-  const stopCameraRef = useRef<(options?: { preserveScanningState?: boolean }) => void>(() => undefined);
+  const cameraOperationIdRef = useRef(0);
+  const stopCameraRef = useRef<(options?: CameraStopOptions) => void>(() => undefined);
   const startVisibleCamerasRef = useRef<(options?: { resumeScanning?: boolean }) => Promise<boolean>>(async () => false);
   const scannerReloadInFlightRef = useRef(false);
   const lastScannerReloadAtRef = useRef(0);
   const scannerReloadIssueRef = useRef<{ code: ScannerReloadTriggerCode; firstSeenAt: number } | null>(null);
   const scannerReloadNoticeTimerRef = useRef<number | null>(null);
+  const mobilePinchZoomRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
+  const resetLiveScanUiRef = useRef<() => void>(() => undefined);
 
   const [availableCameras, setAvailableCameras] = useState<DesktopCameraDevice[]>([]);
   const [cameraSlots, setCameraSlots] = useState<CameraSlot[]>([{ id: 'camera-slot-1', deviceId: '' }]);
@@ -1528,6 +1580,7 @@ export default function ScannerPage() {
   const [cameraMetadataBySlot, setCameraMetadataBySlot] = useState<Record<string, CameraRuntimeMetadata>>({});
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [mobileCameraZoom, setMobileCameraZoom] = useState(1);
   const [scannerReloadNotice, setScannerReloadNotice] = useState<ScannerReloadNotice | null>(null);
   const [cameraError, setCameraError] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -1594,7 +1647,10 @@ export default function ScannerPage() {
     lastCameraConstraintApplyAtRef.current = now;
 
     const metrics = runtimeMetricsRef.current;
-    const adaptiveCamera = adaptiveConfigRef.current.camera;
+    const adaptiveCamera = getActiveCameraCaptureConfig(
+      adaptiveConfigRef.current.camera,
+      metrics.adaptationLevel
+    );
     const constraints: MediaTrackConstraints = {
       ...getCameraPerformanceConstraints(metrics.adaptationLevel),
       width: { ideal: adaptiveCamera.idealWidth },
@@ -1614,7 +1670,11 @@ export default function ScannerPage() {
       })
     );
 
-    metrics.cameraProfile = getCameraProfileLabel(metrics.deviceTier, metrics.adaptationLevel);
+    metrics.cameraProfile = getCameraProfileLabel(
+      metrics.deviceTier,
+      metrics.adaptationLevel,
+      isMobileScannerDevice()
+    );
   }, []);
 
   const maybeAdaptRuntimePerformance = useCallback(
@@ -1680,6 +1740,10 @@ export default function ScannerPage() {
       }));
 
       try {
+        // Reset tracker/OCR/best-frame state before reconnecting so stale
+        // track data from the previous stream does not bleed into the new one.
+        resetLiveScanUiRef.current();
+
         const started = await startVisibleCamerasRef.current({ resumeScanning: true });
         const completedAt = Date.now();
 
@@ -1978,6 +2042,7 @@ export default function ScannerPage() {
   useEffect(() => {
     stopCameraRef.current = stopCamera;
     startVisibleCamerasRef.current = startVisibleCameras;
+    resetLiveScanUiRef.current = resetLiveScanUi;
   });
 
   useEffect(() => {
@@ -2054,16 +2119,45 @@ export default function ScannerPage() {
     return device?.label || (index === 0 ? (language === 'BM' ? 'Kamera Laptop' : 'Laptop Camera') : `Camera ${index + 1}`);
   }
 
-  function stopCamera(options: { preserveScanningState?: boolean } = {}) {
+  function stopCamera(options: CameraStopOptions = {}) {
+    const preserveScanningState = options.preserveScanningState ?? false;
+    const invalidatePendingStarts = options.invalidatePendingStarts ?? !preserveScanningState;
+
+    if (invalidatePendingStarts) {
+      cameraOperationIdRef.current++;
+    }
+
+    isCameraReadyRef.current = false;
+    if (!preserveScanningState) {
+      isScanningRef.current = false;
+      scannerReloadInFlightRef.current = false;
+    }
+
     Object.values(activeStreamsRef.current).forEach((stream) => {
-      stream.getTracks().forEach((track) => track.stop());
+      stream.getTracks().forEach((track) => {
+        track.onended = null;
+        track.stop();
+      });
     });
     activeStreamsRef.current = {};
+
+    Object.values(videoRefs.current).forEach((video) => {
+      if (!video) return;
+      video.pause();
+      video.srcObject = null;
+      video.removeAttribute('src');
+      try {
+        video.load();
+      } catch {
+        // Older mobile browsers can reject load() after a stream is detached.
+      }
+    });
+
     scannerReloadIssueRef.current = null;
     setPreviewSlotIds([]);
     setCameraMetadataBySlot({});
     setIsCameraReady(false);
-    if (!options.preserveScanningState) {
+    if (!preserveScanningState) {
       clearScannerReloadNoticeTimer();
       setScannerReloadNotice(null);
       setIsScanning(false);
@@ -2071,7 +2165,7 @@ export default function ScannerPage() {
     resetLiveScanUi();
   }
 
-  async function startCameraForSlot(slot: CameraSlot) {
+  async function startCameraForSlot(slot: CameraSlot, operationId = cameraOperationIdRef.current) {
     const preflightError = getCameraPreflightError();
     if (preflightError) {
       setCameraError(preflightError);
@@ -2079,18 +2173,36 @@ export default function ScannerPage() {
     }
 
     try {
+      if (operationId !== cameraOperationIdRef.current) return false;
+
       const streamKey = slot.deviceId || 'default-camera';
       let stream = activeStreamsRef.current[streamKey];
 
       if (!stream) {
-        stream = await openDesktopCameraStream(slot.deviceId, adaptiveConfigRef.current.camera);
+        stream = await openDesktopCameraStream(
+          slot.deviceId,
+          getActiveCameraCaptureConfig(
+            adaptiveConfigRef.current.camera,
+            runtimeMetricsRef.current.adaptationLevel
+          )
+        );
+        if (operationId !== cameraOperationIdRef.current) {
+          stream.getTracks().forEach((track) => {
+            track.onended = null;
+            track.stop();
+          });
+          return false;
+        }
         activeStreamsRef.current[streamKey] = stream;
       }
+
+      if (operationId !== cameraOperationIdRef.current) return false;
       const cameraDevice = availableCamerasRef.current.find((device) => device.deviceId === slot.deviceId) || null;
       const cameraMetadata = getCameraRuntimeMetadata(stream, cameraDevice);
 
       const video = videoRefs.current[slot.id];
       if (video) {
+        if (operationId !== cameraOperationIdRef.current) return false;
         video.muted = true;
         video.playsInline = true;
         video.setAttribute('playsinline', 'true');
@@ -2101,8 +2213,10 @@ export default function ScannerPage() {
 
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => {
+          if (operationId !== cameraOperationIdRef.current) return;
           if (!isCameraReadyRef.current && !isScanningRef.current) return;
           window.setTimeout(() => {
+            if (operationId !== cameraOperationIdRef.current) return;
             void startVisibleCamerasRef.current({ resumeScanning: isScanningRef.current });
           }, 1200);
         };
@@ -2121,8 +2235,12 @@ export default function ScannerPage() {
 
   async function startVisibleCameras(options: { resumeScanning?: boolean } = {}) {
     const resumeScanning = options.resumeScanning ?? false;
-    stopCamera({ preserveScanningState: resumeScanning });
+    const operationId = cameraOperationIdRef.current + 1;
+    cameraOperationIdRef.current = operationId;
+    stopCamera({ preserveScanningState: resumeScanning, invalidatePendingStarts: false });
     const devices = await refreshCameraList();
+    if (operationId !== cameraOperationIdRef.current) return false;
+
     const resolvedSlots =
       cameraSlots.length > 0
         ? cameraSlots.map((slot, index) => ({
@@ -2135,26 +2253,44 @@ export default function ScannerPage() {
       : [resolvedSlots.find((slot) => slot.id === activeCameraSlotIdRef.current) || resolvedSlots[0]];
 
     setCameraSlots(slots);
-    const startedResults = await Promise.all(slots.map((slot) => startCameraForSlot(slot)));
+    const startedResults = await Promise.all(slots.map((slot) => startCameraForSlot(slot, operationId)));
+    if (operationId !== cameraOperationIdRef.current) return false;
+
     const started = startedResults.some(Boolean);
+    if (resumeScanning && !isScanningRef.current) {
+      stopCamera({ invalidatePendingStarts: false });
+      return false;
+    }
+
+    isCameraReadyRef.current = started;
     setIsCameraReady(started);
     if (started && resumeScanning) {
       setCurrentPlate('SCANNING');
+      isScanningRef.current = true;
       setIsScanning(true);
     }
     return started;
   }
 
   const handleUseCamera = async (slot: CameraSlot, index: number) => {
+    const operationId = cameraOperationIdRef.current + 1;
+    cameraOperationIdRef.current = operationId;
+    stopCamera({ invalidatePendingStarts: false });
     const devices = await refreshCameraList();
+    if (operationId !== cameraOperationIdRef.current) return;
+
     const resolvedSlot = {
       ...slot,
       deviceId: slot.deviceId || devices[index]?.deviceId || devices[0]?.deviceId || '',
     };
     setCameraSlots((slots) => slots.map((item) => (item.id === slot.id ? resolvedSlot : item)));
     handleSelectActiveSlot(slot.id);
-    const started = await startCameraForSlot(resolvedSlot);
-    if (started) setIsCameraReady(true);
+    const started = await startCameraForSlot(resolvedSlot, operationId);
+    if (operationId !== cameraOperationIdRef.current) return;
+    if (started) {
+      isCameraReadyRef.current = true;
+      setIsCameraReady(true);
+    }
   };
 
   const handleSelectActiveSlot = (slotId: string) => {
@@ -2166,16 +2302,15 @@ export default function ScannerPage() {
   };
 
   const handleCameraSlotDeviceChange = (slotId: string, deviceId: string) => {
+    const hadActiveCamera =
+      isCameraReadyRef.current || isScanningRef.current || previewSlotIds.includes(slotId);
     rememberSelectedCamera(deviceId);
     setCameraSlots((slots) => slots.map((slot) => (slot.id === slotId ? { ...slot, deviceId } : slot)));
     setPreviewSlotIds((ids) => ids.filter((id) => id !== slotId));
     handleSelectActiveSlot(slotId);
-    if (isScanning) {
-      scannerReloadIssueRef.current = null;
-      clearScannerReloadNoticeTimer();
-      setScannerReloadNotice(null);
-      setIsScanning(false);
-      resetLiveScanUi();
+
+    if (hadActiveCamera) {
+      stopCamera();
       setCurrentPlate('READY');
     }
   };
@@ -2190,17 +2325,15 @@ export default function ScannerPage() {
       lastScannerReloadAtRef.current = Date.now();
       scannerReloadIssueRef.current = null;
       setCurrentPlate('SCANNING');
+      isCameraReadyRef.current = true;
+      isScanningRef.current = true;
       setIsScanning(true);
     }
   };
 
-  const handlePauseScanning = () => {
-    scannerReloadIssueRef.current = null;
-    clearScannerReloadNoticeTimer();
-    setScannerReloadNotice(null);
-    setIsScanning(false);
-    resetLiveScanUi();
-    setCurrentPlate('PAUSED');
+  const handleStopScanning = () => {
+    stopCamera();
+    setCurrentPlate('READY');
   };
 
   const handleAddCamera = async () => {
@@ -3786,10 +3919,10 @@ export default function ScannerPage() {
       : 'Keep the camera active. The scanner will continue looking for plates.'
     : previewSlotIds.length > 0
     ? language === 'BM'
-      ? 'Tekan Start Scanning untuk mula.'
+      ? 'Tekan Mula Imbasan untuk mula.'
       : 'Press Start Scanning to begin.'
     : language === 'BM'
-    ? 'Tekan Preview dan benarkan akses kamera.'
+    ? 'Tekan Pratonton dan benarkan akses kamera.'
     : 'Press Preview and allow camera access.';
   const simpleLastResult = latestDetection
     ? latestResultTone === 'EXACT'
@@ -3811,20 +3944,72 @@ export default function ScannerPage() {
     : language === 'BM'
     ? 'Keputusan akan dipaparkan selepas plat dikesan.'
     : 'Results will appear after a plate is detected.';
+  const scannerCameraStyle = {
+    '--scanner-camera-zoom': mobileCameraZoom.toFixed(2),
+  } as React.CSSProperties;
+
+  // Pinch-zoom refs — used by a non-passive native event listener so that
+  // event.preventDefault() actually suppresses the browser's own zoom/scroll.
+  const scannerCameraCardRef = useRef<HTMLDivElement | null>(null);
+  const mobileCameraZoomRef = useRef(mobileCameraZoom);
+  useEffect(() => {
+    mobileCameraZoomRef.current = mobileCameraZoom;
+  }, [mobileCameraZoom]);
+
+  useEffect(() => {
+    const el = scannerCameraCardRef.current;
+    if (!el) return;
+
+    const getTouchDist = (touches: TouchList) =>
+      Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+
+    const onTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 2) return;
+      mobilePinchZoomRef.current = {
+        startDistance: getTouchDist(event.touches),
+        startZoom: mobileCameraZoomRef.current,
+      };
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 2 || !mobilePinchZoomRef.current) return;
+      event.preventDefault(); // only works on a non-passive listener
+      const { startDistance, startZoom } = mobilePinchZoomRef.current;
+      if (startDistance <= 0) return;
+      const ratio = getTouchDist(event.touches) / startDistance;
+      setMobileCameraZoom(clampNumber(startZoom * ratio, 1, 3));
+    };
+
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length < 2) mobilePinchZoomRef.current = null;
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false }); // non-passive to allow preventDefault
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
+    };
+  }, []); // attach once — handlers read latest zoom via ref
 
   return (
-    <div className="space-y-4 max-w-6xl mx-auto px-1 sm:px-0">
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-xl flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+    <div className="scanner-page max-w-6xl mx-auto space-y-3 sm:space-y-5">
+      <div className="hidden bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl sm:flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
           <Link
             href="/"
-            className="p-1.5 sm:p-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white transition-all shrink-0"
+            className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white transition-all shrink-0"
             title={language === 'BM' ? 'Kembali ke Papan Utama' : 'Back to Dashboard'}
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
-            <h1 className="text-xs sm:text-base font-black text-white uppercase tracking-wider">
+            <h1 className="text-sm sm:text-base font-black text-white uppercase tracking-wider leading-tight">
               {t('liveScannerTitle')}
             </h1>
             <p className="text-[10px] text-slate-500 hidden sm:block">
@@ -3833,7 +4018,7 @@ export default function ScannerPage() {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2">
+        <div className="grid grid-cols-[1fr_auto] gap-2 sm:flex sm:items-center sm:justify-end">
             <button
               type="button"
               onClick={() => void refreshCameraList()}
@@ -3841,7 +4026,7 @@ export default function ScannerPage() {
               title="Refresh cameras"
             >
               <RefreshCw className="w-4 h-4" />
-              <span>Refresh</span>
+              <span>{language === 'BM' ? 'Segar' : 'Refresh'}</span>
             </button>
             {canUseDiagnostics && (
               <button
@@ -3889,29 +4074,29 @@ export default function ScannerPage() {
                 className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-300 transition-all hover:border-cyan-700 hover:text-cyan-300 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus className="w-4 h-4" />
-                <span>Add Camera</span>
+                <span>{language === 'BM' ? 'Tambah Kamera' : 'Add Camera'}</span>
               </button>
             )}
             {isScanning ? (
               <button
-                onClick={handlePauseScanning}
-                className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-amber-950 text-amber-300 border border-amber-700 text-xs font-black uppercase flex items-center justify-center gap-2"
+                onClick={handleStopScanning}
+                className="px-4 py-3 sm:py-2 rounded-xl bg-red-950 text-red-200 border border-red-700 text-xs font-black uppercase flex items-center justify-center gap-2"
               >
-                <Pause className="w-4 h-4" />
-                <span>Pause Scan</span>
+                <XCircle className="w-4 h-4" />
+                <span>{language === 'BM' ? 'Henti Imbasan' : 'Stop Scan'}</span>
               </button>
             ) : (
               <button
                 onClick={() => void handleStartScanning()}
-                className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-black uppercase flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20"
+                className="px-4 py-3 sm:py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-black uppercase flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20"
               >
                 <Play className="w-4 h-4" />
-                <span>Start Scanning</span>
+                <span>{language === 'BM' ? 'Mula Imbasan' : 'Start Scanning'}</span>
               </button>
             )}
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
-              className={`p-2 rounded-xl border text-xs font-bold transition-all shrink-0 ${
+              className={`p-3 sm:p-2 rounded-xl border text-xs font-bold transition-all shrink-0 ${
                 soundEnabled
                   ? 'bg-cyan-950 text-cyan-400 border-cyan-800'
                   : 'bg-slate-800 text-slate-400 border-slate-700'
@@ -3924,28 +4109,30 @@ export default function ScannerPage() {
       </div>
 
       {cameraError && (
-        <div className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-xs font-bold text-red-300">
+        <div className="hidden sm:block rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-xs font-bold text-red-300">
           {cameraError}
         </div>
       )}
 
       {!cameraError && (
-        <ModelStatusBanner
-          runtimeState={runtimeState}
-          detectorProvider={detectorProvider}
-          ocrProvider={ocrProvider}
-          benchmark={benchmarkResult}
-          errorMessage={runtimeErrorMessage}
-          debugMode={showDeveloperOverlay}
-          onRetry={startRuntimeInit}
-          onManualSearch={() => {
-            window.location.href = '/search';
-          }}
-        />
+        <div className="hidden sm:block">
+          <ModelStatusBanner
+            runtimeState={runtimeState}
+            detectorProvider={detectorProvider}
+            ocrProvider={ocrProvider}
+            benchmark={benchmarkResult}
+            errorMessage={runtimeErrorMessage}
+            debugMode={showDeveloperOverlay}
+            onRetry={startRuntimeInit}
+            onManualSearch={() => {
+              window.location.href = '/search';
+            }}
+          />
+        </div>
       )}
 
       {showUnsupportedBrowserWarning && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-700 bg-amber-950/35 px-3 py-2 text-[11px] font-bold text-amber-200">
+        <div className="hidden sm:flex items-start gap-2 rounded-xl border border-amber-700 bg-amber-950/35 px-3 py-2 text-[11px] font-bold text-amber-200">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             {language === 'BM'
@@ -3955,8 +4142,8 @@ export default function ScannerPage() {
         </div>
       )}
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-3 shadow-xl">
-        <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="hidden sm:block rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-3 shadow-xl">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Camera className="h-4 w-4 text-cyan-300" />
             <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">
@@ -3976,19 +4163,19 @@ export default function ScannerPage() {
         </div>
 
         {!showDeveloperOverlay ? (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
               [language === 'BM' ? 'Kamera' : 'Camera', activeCameraLabel],
               [language === 'BM' ? 'Keadaan' : 'Status', simpleScannerStatus],
               [language === 'BM' ? 'Keputusan Terkini' : 'Latest Result', simpleLastResult],
               [language === 'BM' ? 'Jumlah Sesi' : 'Session Scans', liveDetections.length.toString()],
             ].map(([label, value]) => (
-              <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2.5">
+              <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-3 sm:py-2.5">
                 <div className="truncate text-[10px] font-bold uppercase text-slate-500">{label}</div>
                 <div className="mt-1 truncate text-sm font-black text-slate-100">{value}</div>
               </div>
             ))}
-            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2.5 sm:col-span-2 lg:col-span-4">
+            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-3 sm:py-2.5 sm:col-span-2 lg:col-span-4">
               <div className="text-[10px] font-bold uppercase text-slate-500">
                 {language === 'BM' ? 'Nota' : 'Message'}
               </div>
@@ -4030,7 +4217,7 @@ export default function ScannerPage() {
 
       {latestDetection && latestResultTone && (
         <div
-          className={`rounded-xl border px-3 py-2.5 shadow-lg ${
+          className={`hidden sm:block rounded-xl border px-3 py-2.5 shadow-lg ${
             latestResultTone === 'EXACT'
               ? 'border-red-700 bg-red-950/45'
               : latestResultTone === 'POSSIBLE'
@@ -4102,10 +4289,12 @@ export default function ScannerPage() {
       )}
 
       <div
-        className="relative bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-xl sm:aspect-video"
+        ref={scannerCameraCardRef}
+        className="scanner-camera-card relative h-[42dvh] min-h-[240px] max-h-[330px] overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-xl sm:aspect-video sm:h-auto sm:min-h-0 sm:max-h-none"
+        style={scannerCameraStyle}
       >
         <div
-          className={`grid gap-1.5 p-1.5 sm:absolute sm:inset-0 ${
+          className={`grid h-full gap-2 p-2 sm:absolute sm:inset-0 ${
             cameraSlots.length === 1
               ? 'grid-cols-1'
               : cameraSlots.length === 2
@@ -4122,7 +4311,7 @@ export default function ScannerPage() {
               <div
                 key={slot.id}
                 onClick={() => handleSelectActiveSlot(slot.id)}
-                className={`relative min-h-[420px] sm:min-h-0 rounded-xl overflow-hidden border bg-slate-950 text-left transition-all ${
+                className={`relative min-h-0 rounded-xl overflow-hidden border bg-slate-950 text-left transition-all ${
                   isAlertSlot
                     ? 'border-red-500 ring-2 ring-red-500/40'
                     : 'border-slate-800'
@@ -4132,7 +4321,7 @@ export default function ScannerPage() {
                   ref={(node) => {
                     videoRefs.current[slot.id] = node;
                   }}
-                  className="absolute inset-0 h-full w-full object-cover"
+                  className="scanner-camera-media absolute inset-0 h-full w-full object-contain sm:object-cover"
                   muted
                   playsInline
                   autoPlay
@@ -4145,7 +4334,16 @@ export default function ScannerPage() {
                     </div>
                     <div>
                       <div className="text-xs font-black text-white uppercase tracking-wider">{slotLabel}</div>
-                      <div className="text-[10px] text-slate-500 mt-1">Choose camera and use preview before scanning.</div>
+                      <div className="text-[10px] text-slate-500 mt-1">
+                        <span className="sm:hidden">
+                          {language === 'BM' ? 'Tekan Mula Imbasan untuk buka kamera.' : 'Tap Start Scan to open camera.'}
+                        </span>
+                        <span className="hidden sm:inline">
+                          {language === 'BM'
+                            ? 'Pilih kamera dan guna pratonton sebelum mengimbas.'
+                            : 'Choose camera and use preview before scanning.'}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -4154,7 +4352,7 @@ export default function ScannerPage() {
                   ref={(node) => {
                     canvasRefs.current[slot.id] = node;
                   }}
-                  className="absolute inset-0 z-10 h-full w-full object-cover pointer-events-none"
+                  className="scanner-camera-media absolute inset-0 z-10 h-full w-full object-contain pointer-events-none sm:object-cover"
                 />
 
                 {scannerReloadActive && (
@@ -4173,7 +4371,7 @@ export default function ScannerPage() {
                   </div>
                 )}
 
-                <div className="absolute inset-x-2.5 top-2.5 z-20 flex items-center gap-1.5">
+                <div className="absolute inset-x-2.5 top-2.5 z-20 hidden sm:flex items-center gap-1.5">
                   <select
                     value={slot.deviceId}
                     onClick={(event) => event.stopPropagation()}
@@ -4200,7 +4398,7 @@ export default function ScannerPage() {
                     }}
                     className="h-7 rounded-lg border border-cyan-700 bg-cyan-950/90 px-2 text-[10px] font-bold text-cyan-200 hover:bg-cyan-900"
                   >
-                    Preview
+                    {language === 'BM' ? 'Pratonton' : 'Preview'}
                   </button>
                   {cameraSlots.length > 1 && (
                     <button
@@ -4225,10 +4423,10 @@ export default function ScannerPage() {
                       void handleAddCamera();
                     }}
                     disabled={cameraSlots.length >= 4}
-                    className="sm:hidden absolute bottom-2.5 right-2.5 z-20 inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/85 px-2.5 py-1 text-[10px] font-bold text-slate-300 disabled:opacity-40"
+                    className="hidden absolute bottom-2.5 right-2.5 z-20 items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/85 px-2.5 py-1 text-[10px] font-bold text-slate-300 disabled:opacity-40"
                   >
                     <Plus className="h-3 w-3" />
-                    <span>Add</span>
+                    <span>{language === 'BM' ? 'Tambah' : 'Add'}</span>
                   </button>
                 )}
                 {isAlertSlot && activeSlotAlert && (
@@ -4305,10 +4503,124 @@ export default function ScannerPage() {
             );
           })}
         </div>
+
+        <div className="absolute inset-x-3 top-3 z-20 flex items-center justify-between gap-2 sm:hidden">
+          <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2 backdrop-blur-md">
+            <div className="truncate text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
+              {language === 'BM' ? 'Pengimbas' : 'Scanner'}
+            </div>
+            <div className="truncate text-[11px] font-bold text-slate-200">{simpleScannerStatus}</div>
+          </div>
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            className={`h-10 w-10 rounded-xl border text-xs font-bold transition-all shrink-0 backdrop-blur-md ${
+              soundEnabled
+                ? 'bg-cyan-950/90 text-cyan-300 border-cyan-700'
+                : 'bg-slate-950/80 text-slate-400 border-slate-700'
+            }`}
+            title="Toggle sound"
+          >
+            {soundEnabled ? <Volume2 className="mx-auto h-4 w-4" /> : <VolumeX className="mx-auto h-4 w-4" />}
+          </button>
+        </div>
+
+        <div className="absolute inset-x-3 bottom-3 z-20 sm:hidden">
+          {cameraError && (
+            <div className="mb-2 rounded-xl border border-red-700 bg-red-950/80 px-3 py-2 text-[11px] font-bold text-red-200 backdrop-blur-md">
+              {cameraError}
+            </div>
+          )}
+          {isScanning ? (
+            <button
+              onClick={handleStopScanning}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-red-700 bg-red-950/90 text-xs font-black uppercase tracking-wider text-red-100 shadow-xl backdrop-blur-md"
+            >
+              <XCircle className="h-4 w-4" />
+              <span>{language === 'BM' ? 'Henti Imbasan' : 'Stop Scan'}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => void handleStartScanning()}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-cyan-600 text-xs font-black uppercase tracking-wider text-white shadow-xl shadow-cyan-500/20"
+            >
+              <Play className="h-4 w-4" />
+              <span>{language === 'BM' ? 'Mula Imbasan' : 'Start Scan'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div
+        className={`scanner-mobile-result sm:hidden rounded-2xl border p-3 shadow-xl ${
+          latestResultTone === 'EXACT'
+            ? 'border-red-700 bg-red-950/45'
+            : latestResultTone === 'POSSIBLE'
+            ? 'border-amber-700 bg-amber-950/35'
+            : 'border-slate-800 bg-slate-900/90'
+        }`}
+      >
+        {latestDetection && latestResultTone ? (
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate font-mono text-xl font-black leading-none text-cyan-300">
+                  {latestDetection.plate}
+                </span>
+                <span
+                  className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-black uppercase ${
+                    latestResultTone === 'EXACT'
+                      ? 'bg-red-600 text-white'
+                      : latestResultTone === 'POSSIBLE'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'border border-slate-700 bg-slate-950 text-slate-300'
+                  }`}
+                >
+                  {latestResultTone === 'EXACT'
+                    ? language === 'BM'
+                      ? 'Padan'
+                      : 'Match'
+                    : latestResultTone === 'POSSIBLE'
+                    ? language === 'BM'
+                      ? 'Semak'
+                      : 'Review'
+                    : language === 'BM'
+                    ? 'Tiada'
+                    : 'None'}
+                </span>
+              </div>
+              <div className="mt-1 truncate text-xs font-semibold text-slate-300">
+                {latestResultTone === 'EXACT' && latestExactVehicle
+                  ? `${latestExactVehicle.brand} ${latestExactVehicle.model}`
+                  : simpleLastResult}
+              </div>
+              <div className="mt-0.5 truncate text-[11px] font-mono text-slate-500">
+                {latestDetection.confidence}% · {latestDetection.timestamp}
+              </div>
+            </div>
+            <Link
+              href={latestSearchHref}
+              className="shrink-0 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-[10px] font-black uppercase text-slate-300"
+            >
+              {language === 'BM' ? 'Semak' : 'View'}
+            </Link>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-800 bg-slate-950">
+              <Activity className="h-4 w-4 text-cyan-300" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-black text-white">{simpleLastResult}</div>
+              <div className="mt-0.5 line-clamp-2 text-[11px] font-medium leading-snug text-slate-400">
+                {simpleLastResultDetail}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {showDeveloperOverlay && (
-        <div className="rounded-2xl border border-cyan-900/70 bg-slate-950/95 p-3 shadow-xl">
+        <div className="hidden sm:block rounded-2xl border border-cyan-900/70 bg-slate-950/95 p-3 shadow-xl">
           <div className="mb-2 flex items-center justify-between gap-2">
             <div>
               <div className="text-[10px] font-black uppercase tracking-wider text-cyan-300">Developer Metrics</div>
@@ -4439,7 +4751,7 @@ export default function ScannerPage() {
         </div>
       )}
 
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-5 shadow-xl space-y-3">
+      <div className="hidden sm:block bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3">
         <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-cyan-400" />
@@ -4452,14 +4764,14 @@ export default function ScannerPage() {
           </span>
         </div>
 
-        <div className="sm:hidden space-y-2">
+        <div className="sm:hidden space-y-3">
           {liveDetections.length > 0 ? (
             liveDetections.map((det) => (
               <button
                 key={det.id}
                 type="button"
                 onClick={() => setExpandedDetectionId((current) => (current === det.id ? null : det.id))}
-                className="w-full p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-left space-y-2 hover:border-cyan-900/70 transition-all"
+                className="w-full p-4 rounded-xl bg-slate-950/80 border border-slate-800 text-left space-y-3 hover:border-cyan-900/70 transition-all"
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="space-y-1 min-w-0">

@@ -105,9 +105,11 @@ const FINANCE_OPTIONS = [
   'Other',
 ];
 
+type VehicleFormStep = 'CASE' | 'CUSTOMER' | 'VEHICLE';
+
 export default function VehiclesPage() {
   const { vehicles, addVehicle, updateVehicle, deleteVehicle, importVehiclesCSV, exportVehiclesCSV } = useStorage();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { canManageVehicles, canManageSystem } = useAuth();
   const canModifyVehicles = canManageVehicles;
   const canAddVehicle = canModifyVehicles;
@@ -125,6 +127,7 @@ export default function VehiclesPage() {
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [deletingVehicleId, setDeletingVehicleId] = useState<string | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [vehicleFormStep, setVehicleFormStep] = useState<VehicleFormStep>('CASE');
   const [csvText, setCsvText] = useState('');
 
   // Form Base State
@@ -175,6 +178,7 @@ export default function VehiclesPage() {
     setCustomFinance('');
 
     setEditingVehicle(null);
+    setVehicleFormStep('CASE');
     setIsAddModalOpen(true);
   };
 
@@ -229,6 +233,7 @@ export default function VehiclesPage() {
       setCustomFinance(v.financeCompany);
     }
 
+    setVehicleFormStep('CASE');
     setIsAddModalOpen(true);
   };
 
@@ -315,43 +320,63 @@ export default function VehiclesPage() {
 
   // Dynamic model options based on selected brand
   const currentModelOptions = MODEL_MAP[selectedBrand] || ['Other'];
+  const vehicleFormSteps = [
+    { id: 'CASE', label: language === 'BM' ? 'Kes' : 'Case' },
+    { id: 'CUSTOMER', label: language === 'BM' ? 'Pelanggan' : 'Customer' },
+    { id: 'VEHICLE', label: language === 'BM' ? 'Kenderaan' : 'Vehicle' },
+  ] satisfies Array<{ id: VehicleFormStep; label: string }>;
+  const vehicleFormStepIndex = vehicleFormSteps.findIndex((step) => step.id === vehicleFormStep);
+  const isFirstVehicleFormStep = vehicleFormStepIndex === 0;
+  const isLastVehicleFormStep = vehicleFormStepIndex === vehicleFormSteps.length - 1;
+  const canContinueVehicleForm =
+    vehicleFormStep === 'CASE'
+      ? Boolean(plateInput.trim())
+      : vehicleFormStep === 'CUSTOMER'
+      ? Boolean(customerNameInput.trim())
+      : true;
+  const goToPreviousVehicleFormStep = () => {
+    setVehicleFormStep(vehicleFormSteps[Math.max(vehicleFormStepIndex - 1, 0)].id);
+  };
+  const goToNextVehicleFormStep = () => {
+    setVehicleFormStep(vehicleFormSteps[Math.min(vehicleFormStepIndex + 1, vehicleFormSteps.length - 1)].id);
+  };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-black text-white tracking-wide">
+          <h1 className="text-2xl sm:text-2xl font-black text-white tracking-wide leading-tight">
             {t('manageVehiclesTitle')}
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:items-center">
           {canManageSystem && (
             <button
               onClick={() => setIsImportModalOpen(true)}
-              className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center gap-1.5 transition-all flex-1 sm:flex-initial justify-center"
+              className="px-3 py-2.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center gap-2 transition-all justify-center"
             >
               <Upload className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-400" />
-              <span>{t('importCsv')}</span>
+              <span className="hidden min-[420px]:inline sm:inline">{t('importCsv')}</span>
             </button>
           )}
 
           <button
             onClick={exportVehiclesCSV}
-            className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center gap-1.5 transition-all flex-1 sm:flex-initial justify-center"
+            className="px-3 py-2.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center gap-2 transition-all justify-center"
           >
             <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-            <span>{t('exportCsv')}</span>
+            <span className="hidden min-[420px]:inline sm:inline">{t('exportCsv')}</span>
           </button>
 
           {canAddVehicle && (
             <button
               onClick={openAddModal}
-              className="px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-lg shadow-cyan-500/20 transition-all w-full sm:w-auto justify-center"
+              className="px-3 py-2.5 sm:py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition-all sm:w-auto justify-center"
             >
               <Plus className="w-4 h-4" />
-              <span>{t('addVehicle')}</span>
+              <span className="hidden min-[420px]:inline sm:inline">{t('addVehicle')}</span>
             </button>
           )}
         </div>
@@ -360,7 +385,7 @@ export default function VehiclesPage() {
       {/* Filter & Search Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-xl backdrop-blur-md flex flex-col md:flex-row items-center gap-2.5 sm:gap-3">
         <div className="relative flex-1 w-full">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-2.5 sm:top-3" />
+          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5 sm:top-3" />
           <input
             type="text"
             value={searchTerm}
@@ -369,7 +394,7 @@ export default function VehiclesPage() {
               setCurrentPage(1);
             }}
             placeholder={t('searchVehiclePlaceholder')}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 sm:py-2 text-sm sm:text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
           />
         </div>
 
@@ -381,7 +406,7 @@ export default function VehiclesPage() {
               setStatusFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none cursor-pointer flex-1 md:flex-none"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-3 sm:py-2 text-sm sm:text-xs text-slate-300 focus:outline-none cursor-pointer flex-1 md:flex-none"
           >
             <option value="ALL">{t('filterByStatus')}</option>
             <option value="ACTIVE">{t('statusActive')}</option>
@@ -398,14 +423,18 @@ export default function VehiclesPage() {
         <div className="sm:hidden p-3 space-y-2.5">
           {paginatedVehicles.length > 0 ? (
             paginatedVehicles.map((v) => (
-              <div key={v.id} className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono font-black text-sm text-cyan-400 bg-slate-900 px-2 py-0.5 rounded border border-cyan-900/50">
-                    {v.plate}
-                  </span>
-                  <div className="flex items-center gap-1.5">
+              <div key={v.id} className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="block truncate font-mono font-black text-lg leading-none text-cyan-300">
+                      {v.plate}
+                    </span>
+                    <div className="mt-1 text-sm font-bold text-white leading-tight truncate">{v.brand} {v.model}</div>
+                    <div className="text-[11px] text-slate-400">{v.colour} ({v.year})</div>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
                     <span
-                      className={`inline-flex items-center justify-center w-20 h-5 rounded text-[9px] font-black uppercase text-center ${
+                      className={`inline-flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-black uppercase text-center ${
                         v.priority === 'HIGH'
                           ? 'bg-red-950/70 text-red-300 border border-red-800'
                         : v.priority === 'MEDIUM'
@@ -420,7 +449,7 @@ export default function VehiclesPage() {
                         : t('priorityLow')}
                     </span>
                     <span
-                      className={`inline-flex items-center justify-center w-28 h-5.5 rounded-full text-[9px] font-bold uppercase text-center whitespace-nowrap ${
+                      className={`inline-flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-bold uppercase text-center whitespace-nowrap ${
                         v.status === 'ACTIVE'
                           ? 'bg-slate-900 text-slate-300 border border-slate-700'
                           : v.status === 'FLAGGED'
@@ -441,31 +470,28 @@ export default function VehiclesPage() {
                   </div>
                 </div>
 
-                <div className="text-xs">
-                  <div className="font-bold text-white">{v.brand} {v.model}</div>
-                  <div className="text-[10px] text-slate-400">{v.colour} ({v.year})</div>
-                </div>
-
-                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/60">
-                  <span className="text-[11px] text-slate-400">{v.financeCompany}</span>
-                  <span className="font-mono font-bold text-slate-200">{formatMYR(v.outstandingAmount)}</span>
+                <div className="flex items-start justify-between gap-3 text-xs pt-2.5 border-t border-slate-800/60">
+                  <span className="min-w-0 text-slate-400 leading-snug">{v.financeCompany}</span>
+                  <span className="shrink-0 font-mono font-bold text-slate-200 text-right">{formatMYR(v.outstandingAmount)}</span>
                 </div>
 
                 {canModifyVehicles && (
-                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/40">
+                  <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-slate-800/40">
                     <button
                       onClick={() => openEditModal(v)}
-                      className="p-1.5 rounded-lg bg-slate-800 text-cyan-400 hover:bg-slate-700 text-xs font-bold flex items-center gap-1"
+                      className="p-2.5 rounded-lg bg-slate-800 text-cyan-400 hover:bg-slate-700 text-xs font-bold flex items-center justify-center"
+                      aria-label={t('editVehicle')}
+                      title={t('editVehicle')}
                     >
                       <Edit2 className="w-3.5 h-3.5" />
-                      <span>{t('editVehicle')}</span>
                     </button>
                     <button
                       onClick={() => setDeletingVehicleId(v.id)}
-                      className="p-1.5 rounded-lg bg-red-950/80 text-red-400 hover:bg-red-900 text-xs font-bold flex items-center gap-1"
+                      className="p-2.5 rounded-lg bg-red-950/80 text-red-400 hover:bg-red-900 text-xs font-bold flex items-center justify-center"
+                      aria-label={t('deleteVehicle')}
+                      title={t('deleteVehicle')}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                      <span>{t('deleteVehicle')}</span>
                     </button>
                   </div>
                 )}
@@ -583,7 +609,7 @@ export default function VehiclesPage() {
         {/* Pagination & Rows Selector Footer */}
         <div className="px-4 py-3 bg-slate-950/90 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
           {/* Rows Per Page Dropdown */}
-          <div className="flex items-center gap-2 text-slate-400">
+          <div className="hidden sm:flex items-center gap-2 text-slate-400">
             <span>Show per page:</span>
             <select
               value={pageSize}
@@ -600,14 +626,14 @@ export default function VehiclesPage() {
           </div>
 
           {/* Record Counter */}
-          <div className="text-slate-400 font-mono text-[11px]">
+          <div className="hidden sm:block text-slate-400 font-mono text-[11px]">
             Showing <strong className="text-cyan-400">{totalItems > 0 ? startIndex + 1 : 0}</strong> to{' '}
             <strong className="text-cyan-400">{Math.min(startIndex + pageSize, totalItems)}</strong> of{' '}
             <strong className="text-white">{totalItems}</strong> records
           </div>
 
           {/* Page Controls */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-start">
             <button
               onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
               disabled={safeCurrentPage === 1}
@@ -633,10 +659,10 @@ export default function VehiclesPage() {
 
       {/* ADD / EDIT VEHICLE MODAL */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h2 className="text-lg font-bold text-white">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="vehicle-form-modal flex h-[calc(100dvh-1.5rem)] max-h-[640px] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-cyan-900/50 bg-slate-900 p-4 shadow-2xl sm:block sm:h-auto sm:max-h-[90vh] sm:overflow-y-auto sm:p-6">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-800 pb-3">
+              <h2 className="text-lg sm:text-lg font-bold text-white">
                 {editingVehicle ? t('editVehicle') : t('addVehicle')}
               </h2>
               <button
@@ -647,9 +673,330 @@ export default function VehiclesPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveForm} className="space-y-3.5">
+            <form onSubmit={handleSaveForm} className="flex min-h-0 flex-1 flex-col pt-3 sm:hidden">
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 p-1">
+                {vehicleFormSteps.map((step, index) => (
+                  <button
+                    key={step.id}
+                    type="button"
+                    onClick={() => setVehicleFormStep(step.id)}
+                    className={`h-9 rounded-lg text-[11px] font-black transition-all ${
+                      vehicleFormStep === step.id
+                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/20'
+                        : 'text-slate-400'
+                    }`}
+                  >
+                    <span className="mr-1 font-mono">{index + 1}</span>
+                    {step.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="min-h-0 flex-1 py-3">
+                {vehicleFormStep === 'CASE' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        {t('plateNumber')} *
+                      </label>
+                      <input
+                        type="text"
+                        value={plateInput}
+                        onChange={(e) => setPlateInput(e.target.value)}
+                        placeholder="ANN7569"
+                        className="h-12 w-full rounded-xl border border-slate-800 bg-slate-950 px-3.5 font-mono text-lg font-black uppercase text-cyan-300 focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                          {t('statusCase')}
+                        </label>
+                        <select
+                          value={statusInput}
+                          onChange={(e) => setStatusInput(e.target.value as VehicleStatus)}
+                          className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 text-xs font-bold text-white focus:outline-none"
+                        >
+                          <option value="ACTIVE">{t('statusActive')}</option>
+                          <option value="FLAGGED">{t('statusFlagged')}</option>
+                          <option value="PENDING">{t('statusPending')}</option>
+                          <option value="CLEARED">{t('statusCleared')}</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                          {t('priorityHeader')}
+                        </label>
+                        <select
+                          value={priorityInput}
+                          onChange={(e) => setPriorityInput(e.target.value as VehiclePriority)}
+                          className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 text-xs font-bold text-white focus:outline-none"
+                        >
+                          <option value="HIGH">{t('priorityHigh')}</option>
+                          <option value="MEDIUM">{t('priorityMedium')}</option>
+                          <option value="LOW">{t('priorityLow')}</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        Outstanding (RM)
+                      </label>
+                      <input
+                        type="number"
+                        value={outstandingInput}
+                        onChange={(e) => setOutstandingInput(parseFloat(e.target.value) || 0)}
+                        className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3.5 font-mono text-sm font-black text-red-300 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {vehicleFormStep === 'CUSTOMER' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        {t('customerName')} *
+                      </label>
+                      <input
+                        type="text"
+                        value={customerNameInput}
+                        onChange={(e) => setCustomerNameInput(e.target.value)}
+                        className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3.5 text-sm font-bold text-white focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        {t('phoneHeader')}
+                      </label>
+                      <input
+                        type="text"
+                        value={phoneInput}
+                        onChange={(e) => setPhoneInput(e.target.value)}
+                        className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3.5 font-mono text-sm text-white focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        {t('financeCompany')}
+                      </label>
+                      {selectedFinance === 'Other' ? (
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={customFinance}
+                            onChange={(e) => setCustomFinance(e.target.value)}
+                            placeholder="Masukkan nama bank/kewangan..."
+                            className="h-11 w-full rounded-xl border border-cyan-500 bg-slate-950 pl-3.5 pr-8 text-xs font-bold text-cyan-300 focus:outline-none"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedFinance('CIMB Bank'); setCustomFinance(''); }}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-xs font-bold text-slate-400 hover:text-cyan-400"
+                            title="Tukar ke senarai"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedFinance}
+                          onChange={(e) => setSelectedFinance(e.target.value)}
+                          className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 text-xs font-bold text-white focus:outline-none"
+                        >
+                          {FINANCE_OPTIONS.map((f) => (
+                            <option key={f} value={f}>
+                              {f}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {vehicleFormStep === 'VEHICLE' && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                          Brand
+                        </label>
+                        {selectedBrand === 'Other' ? (
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={customBrand}
+                              onChange={(e) => setCustomBrand(e.target.value)}
+                              placeholder="Brand..."
+                              className="h-11 w-full rounded-xl border border-cyan-500 bg-slate-950 pl-3 pr-7 text-xs font-bold text-cyan-300 focus:outline-none"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={() => { setSelectedBrand('Perodua'); setCustomBrand(''); }}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-xs font-bold text-slate-400 hover:text-cyan-400"
+                              title="Tukar ke senarai"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <select
+                            value={selectedBrand}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedBrand(val);
+                              const defaultModels = MODEL_MAP[val];
+                              setSelectedModel(defaultModels && defaultModels.length > 0 ? defaultModels[0] : 'Other');
+                            }}
+                            className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 text-xs font-bold text-white focus:outline-none"
+                          >
+                            {BRAND_OPTIONS.map((b) => (
+                              <option key={b} value={b}>
+                                {b}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                          Model
+                        </label>
+                        {selectedModel === 'Other' || selectedBrand === 'Other' ? (
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={customModel}
+                              onChange={(e) => setCustomModel(e.target.value)}
+                              placeholder="Model..."
+                              className="h-11 w-full rounded-xl border border-cyan-500 bg-slate-950 pl-3 pr-7 text-xs font-bold text-cyan-300 focus:outline-none"
+                              autoFocus
+                            />
+                            {selectedBrand !== 'Other' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const known = MODEL_MAP[selectedBrand];
+                                  setSelectedModel(known && known.length > 0 ? known[0] : 'Myvi');
+                                  setCustomModel('');
+                                }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-xs font-bold text-slate-400 hover:text-cyan-400"
+                                title="Tukar ke senarai"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <select
+                            value={selectedModel}
+                            onChange={(e) => setSelectedModel(e.target.value)}
+                            className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 text-xs font-bold text-white focus:outline-none"
+                          >
+                            {currentModelOptions.map((m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        Warna
+                      </label>
+                      {selectedColour === 'Other' ? (
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={customColour}
+                            onChange={(e) => setCustomColour(e.target.value)}
+                            placeholder="Warna..."
+                            className="h-11 w-full rounded-xl border border-cyan-500 bg-slate-950 pl-3.5 pr-8 text-xs font-bold text-cyan-300 focus:outline-none"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedColour('White'); setCustomColour(''); }}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-xs font-bold text-slate-400 hover:text-cyan-400"
+                            title="Tukar ke senarai"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedColour}
+                          onChange={(e) => setSelectedColour(e.target.value)}
+                          className="h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 text-xs font-bold text-white focus:outline-none"
+                        >
+                          {COLOUR_OPTIONS.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                        {t('remarks')}
+                      </label>
+                      <textarea
+                        value={remarkInput}
+                        onChange={(e) => setRemarkInput(e.target.value)}
+                        rows={2}
+                        className="h-20 w-full resize-none rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-slate-800 pt-3">
+                <button
+                  type="button"
+                  onClick={isFirstVehicleFormStep ? () => setIsAddModalOpen(false) : goToPreviousVehicleFormStep}
+                  className="h-11 rounded-xl bg-slate-800 text-xs font-bold text-slate-300 transition-all hover:bg-slate-700"
+                >
+                  {isFirstVehicleFormStep ? t('cancelBtn') : t('prevBtn')}
+                </button>
+                {isLastVehicleFormStep ? (
+                  <button
+                    type="submit"
+                    disabled={!plateInput.trim() || !customerNameInput.trim()}
+                    className="h-11 rounded-xl bg-cyan-600 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-cyan-600/20 transition-all hover:bg-cyan-500 disabled:opacity-40"
+                  >
+                    {t('saveBtn')}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={goToNextVehicleFormStep}
+                    disabled={!canContinueVehicleForm}
+                    className="h-11 rounded-xl bg-cyan-600 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-cyan-600/20 transition-all hover:bg-cyan-500 disabled:opacity-40"
+                  >
+                    {t('nextBtn')}
+                  </button>
+                )}
+              </div>
+            </form>
+
+            <form onSubmit={handleSaveForm} className="hidden sm:block space-y-3.5 pt-4">
               {/* Row 1: Nombor Plat & Status Kes */}
-              <div className="grid grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
                     {t('plateNumber')} *
@@ -682,7 +1029,7 @@ export default function VehiclesPage() {
               </div>
 
               {/* Row 2: Keutamaan & Syarikat Kewangan */}
-              <div className="grid grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
                     {t('priorityHeader')}
@@ -739,7 +1086,7 @@ export default function VehiclesPage() {
               </div>
 
               {/* Row 3: Nama Pelanggan & Nombor Telefon */}
-              <div className="grid grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
                     {t('customerName')} *
@@ -767,7 +1114,7 @@ export default function VehiclesPage() {
               </div>
 
               {/* Row 4: Brand & Model */}
-              <div className="grid grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">Brand</label>
                   {selectedBrand === 'Other' ? (
@@ -859,7 +1206,7 @@ export default function VehiclesPage() {
               </div>
 
               {/* Row 5: Warna & Tunggakan (RM) */}
-              <div className="grid grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">Warna</label>
                   {selectedColour === 'Other' ? (
@@ -923,7 +1270,7 @@ export default function VehiclesPage() {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-800 sm:flex sm:items-center sm:justify-end">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
@@ -945,8 +1292,8 @@ export default function VehiclesPage() {
 
       {/* DELETE CONFIRMATION MODAL */}
       {deletingVehicleId && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-900/60 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 text-center">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-red-900/60 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 text-center max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
             <Trash2 className="w-10 h-10 text-red-400 mx-auto" />
             <h2 className="text-lg font-bold text-white">{t('deleteVehicle')}</h2>
             <p className="text-xs text-slate-300">{t('confirmDelete')}</p>
@@ -970,8 +1317,8 @@ export default function VehiclesPage() {
 
       {/* IMPORT CSV MODAL */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-4 sm:p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-cyan-400" />
@@ -986,7 +1333,7 @@ export default function VehiclesPage() {
             </div>
 
             {/* Template Download Box */}
-            <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800/60 flex items-center justify-between gap-3">
+            <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-2 text-xs">
                 <FileText className="w-4 h-4 text-cyan-400 shrink-0" />
                 <div>
@@ -997,7 +1344,7 @@ export default function VehiclesPage() {
               <button
                 onClick={downloadCSVTemplate}
                 type="button"
-                className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shrink-0 flex items-center gap-1 transition-all"
+                className="w-full sm:w-auto px-3 py-2 sm:py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shrink-0 flex items-center justify-center gap-1 transition-all"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download Template</span>
@@ -1017,7 +1364,7 @@ export default function VehiclesPage() {
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-cyan-300 focus:outline-none"
               />
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 sm:flex sm:items-center sm:justify-end">
                 <button
                   type="button"
                   onClick={() => setIsImportModalOpen(false)}

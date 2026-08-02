@@ -104,7 +104,7 @@ export const dictionary: Record<Language, Record<string, string>> = {
     time: 'Masa',
     fullscreen: 'Skrin Penuh',
     switchCamera: 'Tukar Kamera',
-    pauseStream: 'Jeda Stream',
+    pauseStream: 'Henti Strim',
 
     // Vehicle Management
     manageVehiclesTitle: 'Pengurusan Kenderaan Target',
@@ -338,7 +338,7 @@ export const dictionary: Record<Language, Record<string, string>> = {
     time: 'Time',
     fullscreen: 'Fullscreen',
     switchCamera: 'Switch Camera',
-    pauseStream: 'Pause Stream',
+    pauseStream: 'Stop Stream',
 
     // Vehicle Management
     manageVehiclesTitle: 'Vehicle Repository Management',

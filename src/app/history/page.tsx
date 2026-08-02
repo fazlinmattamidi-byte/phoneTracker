@@ -22,6 +22,30 @@ function createHistoryExportFileName(role: string): string {
   return `track_audit_history_${role.toLowerCase()}_${Date.now()}.csv`;
 }
 
+function formatAuditCompactTime(isoString: string): string {
+  if (!isoString) return '-';
+  try {
+    const d = new Date(isoString);
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(d)
+      .reduce<Record<string, string>>((acc, part) => {
+        if (part.type !== 'literal') acc[part.type] = part.value;
+        return acc;
+      }, {});
+
+    return `${parts.day} ${parts.month}, ${parts.hour}:${parts.minute}`;
+  } catch {
+    return isoString;
+  }
+}
+
 export default function HistoryPage() {
   const { history, users } = useStorage();
   const { t, language } = useLanguage();
@@ -86,6 +110,31 @@ export default function HistoryPage() {
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const startIndex = (safeCurrentPage - 1) * pageSize;
   const paginatedLogs = filteredLogs.slice(startIndex, startIndex + pageSize);
+  const activeFilterCount =
+    (filterType !== 'ALL' ? 1 : 0) +
+    (statusMatchFilter !== 'ALL' ? 1 : 0) +
+    (sortOrder !== 'NEWEST' ? 1 : 0);
+
+  const statusOptions = [
+    { id: 'ALL', label: language === 'BM' ? 'Semua' : 'All' },
+    { id: 'EXACT', label: language === 'BM' ? 'Padan' : 'Exact' },
+    { id: 'POSSIBLE', label: language === 'BM' ? 'Mungkin' : 'Maybe' },
+    { id: 'NONE', label: language === 'BM' ? 'Tiada' : 'None' },
+  ] satisfies Array<{ id: MatchStatusFilter; label: string }>;
+
+  const sortOptions = [
+    { id: 'NEWEST', label: language === 'BM' ? 'Baru' : 'Newest' },
+    { id: 'OLDEST', label: language === 'BM' ? 'Lama' : 'Oldest' },
+    { id: 'PLATE_AZ', label: language === 'BM' ? 'Plat A-Z' : 'Plate A-Z' },
+  ] satisfies Array<{ id: HistorySortOrder; label: string }>;
+
+  const categoryOptions = [
+    { id: 'ALL', label: language === 'BM' ? 'Semua' : 'All' },
+    { id: 'SEARCH', label: language === 'BM' ? 'Cari' : 'Search' },
+    { id: 'DETECTION', label: language === 'BM' ? 'Imbas' : 'Scan' },
+    { id: 'VEHICLE', label: language === 'BM' ? 'Kenderaan' : 'Vehicle' },
+  ] satisfies Array<{ id: HistoryFilterType; label: string }>;
+
   const handleExportVisibleHistory = () => {
     const headers = 'ID,Type,Action,Plate,Details,Actor,Timestamp,MatchStatus,CameraID,CameraName\n';
     const rows = filteredLogs
@@ -100,32 +149,37 @@ export default function HistoryPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="audit-page space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-white tracking-wide">
-            {t('historyTitle')}
+      <div className="flex items-start justify-between gap-3 sm:items-center">
+        <div className="min-w-0">
+          <h1 className="text-[1.65rem] sm:text-2xl font-black text-white tracking-wide leading-[1.08]">
+            <span className="sm:hidden">{language === 'BM' ? 'Sejarah Audit' : 'Audit History'}</span>
+            <span className="hidden sm:inline">{t('historyTitle')}</span>
           </h1>
+          <p className="mt-1 text-xs font-medium text-slate-400 sm:hidden">
+            {totalItems} {language === 'BM' ? 'rekod' : 'records'}
+          </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             onClick={handleExportVisibleHistory}
-            className="flex-1 sm:flex-initial px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center justify-center gap-1.5 transition-all"
+            className="audit-export-button h-10 px-3 sm:h-auto sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center justify-center gap-2 transition-all"
+            aria-label={t('exportCsv')}
           >
             <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-            <span>{t('exportCsv')}</span>
+            <span className="sm:hidden">CSV</span>
+            <span className="hidden sm:inline">{t('exportCsv')}</span>
           </button>
-
         </div>
       </div>
 
       {/* Main Search Input & Filters Toggle Bar */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-2.5 sm:top-3" />
+      <div className="audit-toolbar space-y-2.5 rounded-2xl border border-slate-800 bg-slate-900/90 p-2.5 shadow-xl backdrop-blur-md sm:space-y-3 sm:p-0 sm:bg-transparent sm:border-0 sm:shadow-none">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="relative min-w-0 flex-1">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5 sm:top-3" />
             <input
               type="text"
               value={searchQuery}
@@ -134,49 +188,59 @@ export default function HistoryPage() {
                 setCurrentPage(1);
               }}
               placeholder={t('searchQueryPlaceholder')}
-              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2 sm:py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+              className="audit-search-input h-11 w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 text-sm sm:text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors sm:h-auto sm:bg-slate-900 sm:py-2.5"
             />
           </div>
 
           <button
             type="button"
             onClick={() => setShowFilterDrawer(!showFilterDrawer)}
-            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 sm:gap-2 transition-all shrink-0 ${
+            className={`audit-filter-toggle relative h-11 w-11 sm:h-auto sm:w-auto sm:px-4 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all shrink-0 ${
               showFilterDrawer || statusMatchFilter !== 'ALL' || sortOrder !== 'NEWEST' || filterType !== 'ALL'
                 ? 'bg-cyan-950 text-cyan-300 border-cyan-500/60 shadow-md'
                 : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
             }`}
+            aria-label={t('filterAndSort')}
           >
             <SlidersHorizontal className="w-4 h-4 text-cyan-400" />
-            <span>{t('filterAndSort')}</span>
+            <span className="hidden sm:inline">{t('filterAndSort')}</span>
+            {activeFilterCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-500 px-1 text-[9px] font-black text-slate-950 sm:hidden">
+                {activeFilterCount}
+              </span>
+            )}
           </button>
         </div>
 
         {/* Expandable Clean Filter Panel */}
         {showFilterDrawer && (
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl backdrop-blur-md space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
-            {/* Status Match Filter */}
-            <div className="space-y-1.5">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                {t('matchStatusHeader')}
+          <div className="audit-filter-panel bg-slate-900/90 border border-slate-800 rounded-2xl p-3 shadow-xl backdrop-blur-md space-y-3 animate-in fade-in slide-in-from-top-2 duration-200 sm:p-4 sm:space-y-4">
+            <div className="flex items-center justify-between sm:hidden">
+              <span className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">
+                {language === 'BM' ? 'Penapis' : 'Filters'}
               </span>
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                {([
-                  { id: 'ALL', label: language === 'BM' ? 'SEMUA' : 'ALL' },
-                  { id: 'EXACT', label: language === 'BM' ? 'PADANAN KES' : 'EXACT MATCH' },
-                  { id: 'POSSIBLE', label: language === 'BM' ? 'BERPOTENSI' : 'POSSIBLE' },
-                  { id: 'NONE', label: language === 'BM' ? 'TIADA' : 'UNMATCHED' },
-                ] satisfies Array<{ id: MatchStatusFilter; label: string }>).map((s) => (
+              <span className="text-[10px] font-mono text-slate-500">
+                {paginatedLogs.length}/{totalItems}
+              </span>
+            </div>
+
+            {/* Status Match Filter */}
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.16em] block">
+                {language === 'BM' ? 'Status' : 'Status'}
+              </span>
+              <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+                {statusOptions.map((s) => (
                   <button
                     key={s.id}
                     onClick={() => {
                       setStatusMatchFilter(s.id);
                       setCurrentPage(1);
                     }}
-                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold uppercase transition-all ${
+                    className={`audit-filter-chip h-8 rounded-lg px-2 text-[11px] font-bold transition-all sm:h-auto sm:py-1 ${
                       statusMatchFilter === s.id
-                        ? 'bg-cyan-950 text-cyan-300 border-cyan-400 shadow-sm'
-                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white'
+                        ? 'audit-filter-chip-active'
+                        : ''
                     }`}
                   >
                     {s.label}
@@ -186,26 +250,22 @@ export default function HistoryPage() {
             </div>
 
             {/* Sort Order & Event Type Filter Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 border-t border-slate-800 pt-3">
+            <div className="grid grid-cols-1 gap-3 border-t border-slate-800 pt-3 sm:grid-cols-2 sm:gap-4">
               {/* Sort Order Selector */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block flex items-center gap-1">
+              <div className="space-y-2">
+                <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-[0.16em]">
                   <ArrowUpDown className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>{t('sortByHeader')}</span>
+                  <span>{language === 'BM' ? 'Susun' : 'Sort'}</span>
                 </span>
-                <div className="flex items-center gap-1.5">
-                  {([
-                    { id: 'NEWEST', label: t('sortNewest') },
-                    { id: 'OLDEST', label: t('sortOldest') },
-                    { id: 'PLATE_AZ', label: t('sortPlateAZ') },
-                  ] satisfies Array<{ id: HistorySortOrder; label: string }>).map((so) => (
+                <div className="grid grid-cols-3 gap-1.5 sm:flex sm:items-center">
+                  {sortOptions.map((so) => (
                     <button
                       key={so.id}
                       onClick={() => setSortOrder(so.id)}
-                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                      className={`audit-filter-chip h-8 rounded-lg px-2 text-[11px] font-bold leading-tight transition-all sm:h-auto sm:py-1 ${
                         sortOrder === so.id
-                          ? 'bg-cyan-950 text-cyan-300 border-cyan-500/60'
-                          : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white'
+                          ? 'audit-filter-chip-active'
+                          : ''
                       }`}
                     >
                       {so.label}
@@ -215,27 +275,22 @@ export default function HistoryPage() {
               </div>
 
               {/* Event Type Filter */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                  {language === 'BM' ? 'KATEGORI LOG:' : 'LOG CATEGORY:'}
+              <div className="space-y-2">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.16em] block">
+                  {language === 'BM' ? 'Kategori' : 'Category'}
                 </span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {([
-                    { id: 'ALL', label: t('filterAll') },
-                    { id: 'SEARCH', label: t('filterSearch') },
-                    { id: 'DETECTION', label: t('filterDetection') },
-                    { id: 'VEHICLE', label: t('filterVehicle') },
-                  ] satisfies Array<{ id: HistoryFilterType; label: string }>).map((cat) => (
+                <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center">
+                  {categoryOptions.map((cat) => (
                     <button
                       key={cat.id}
                       onClick={() => {
                         setFilterType(cat.id);
                         setCurrentPage(1);
                       }}
-                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                      className={`audit-filter-chip h-8 rounded-lg px-1.5 text-[11px] font-bold transition-all sm:h-auto sm:px-2.5 sm:py-1 ${
                         filterType === cat.id
-                          ? 'bg-cyan-950 text-cyan-300 border-cyan-500/60'
-                          : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white'
+                          ? 'audit-filter-chip-active'
+                          : ''
                       }`}
                     >
                       {cat.label}
@@ -249,49 +304,61 @@ export default function HistoryPage() {
       </div>
 
       {/* History Log Container */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl overflow-hidden flex flex-col justify-between">
+      <div className="audit-list-wrap sm:bg-slate-900/90 sm:border sm:border-slate-800 sm:rounded-2xl sm:shadow-xl sm:overflow-hidden sm:flex sm:flex-col sm:justify-between">
         {/* Mobile View: Cards */}
-        <div className="sm:hidden p-3 space-y-2.5">
+        <div className="sm:hidden space-y-2.5">
           {paginatedLogs.length > 0 ? (
             paginatedLogs.map((log) => {
               const isTandaTindakan = log.statusMatch === 'EXACT' || log.action.includes('Tanda Tindakan');
               return (
-                <div key={log.id} className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2.5 shadow-sm">
+                <article key={log.id} className="audit-log-card rounded-2xl border border-slate-800 bg-slate-900/90 p-3.5 shadow-xl">
                   {/* Top Bar: Event Badges + Date Timestamp */}
-                  <div className="flex flex-wrap items-center justify-between gap-1.5 pb-2 border-b border-slate-800/50">
-                    <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="mb-2 flex min-w-0 items-center gap-1.5">
                       <span
-                        className={`inline-flex items-center justify-center w-20 px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                        className={`audit-type-chip inline-flex shrink-0 items-center justify-center rounded-md px-2 py-1 text-[10px] font-bold uppercase ${
                           log.type === 'DETECTION'
-                            ? 'bg-blue-950 text-blue-300 border border-blue-700'
+                            ? 'audit-type-detection bg-blue-950 text-blue-300 border border-blue-700'
                             : log.type === 'SEARCH'
-                            ? 'bg-cyan-950 text-cyan-300 border border-cyan-700'
+                            ? 'audit-type-search bg-cyan-950 text-cyan-300 border border-cyan-700'
                             : log.type === 'VEHICLE'
-                            ? 'bg-purple-950 text-purple-300 border border-purple-700'
-                            : 'bg-amber-950 text-amber-300 border border-amber-700'
+                            ? 'audit-type-vehicle bg-purple-950 text-purple-300 border border-purple-700'
+                            : 'audit-type-user bg-amber-950 text-amber-300 border border-amber-700'
                         }`}
                       >
-                        {log.type}
+                        {log.type === 'DETECTION'
+                          ? language === 'BM'
+                            ? 'Imbas'
+                            : 'Scan'
+                          : log.type === 'SEARCH'
+                          ? language === 'BM'
+                            ? 'Cari'
+                            : 'Search'
+                          : log.type}
                       </span>
                       {isTandaTindakan && (
-                        <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[9px] font-black uppercase bg-cyan-950 text-cyan-300 border border-cyan-700 whitespace-nowrap">
-                          TANDA TINDAKAN
+                        <span className="audit-type-chip audit-action-chip inline-flex shrink-0 items-center justify-center rounded-md bg-cyan-950 px-2 py-1 text-[10px] font-black uppercase text-cyan-300 border border-cyan-700">
+                          {language === 'BM' ? 'Tindakan' : 'Action'}
+                        </span>
+                      )}
+                      </div>
+                      {log.plate && (
+                        <span className="block truncate font-mono text-lg font-black leading-none text-cyan-300">
+                          {log.plate}
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0 ml-auto">{formatDate(log.timestamp)}</span>
+                    <time className="shrink-0 pt-0.5 text-[11px] font-mono text-slate-500">
+                      {formatAuditCompactTime(log.timestamp)}
+                    </time>
                   </div>
 
                   {/* Plate Number & Main Content */}
-                  <div className="space-y-1">
-                    {log.plate && (
-                      <span className="inline-flex items-center justify-center w-24 font-mono font-black text-xs text-cyan-400 bg-slate-900 px-2 py-0.5 rounded border border-cyan-900/50">
-                        {log.plate}
-                      </span>
-                    )}
-                    <p className="text-xs text-slate-200 font-sans font-medium leading-relaxed">{log.note || log.details}</p>
+                  <div className="mt-2 space-y-1.5">
+                    <p className="line-clamp-2 text-[13px] text-slate-200 font-sans font-medium leading-snug">{log.note || log.details}</p>
                     {(log.cameraName || log.cameraId) && (
-                      <p className="text-[10px] font-mono text-slate-500">
+                      <p className="text-[11px] font-mono text-slate-500 truncate">
                         {log.cameraName || log.cameraId}
                       </p>
                     )}
@@ -299,11 +366,13 @@ export default function HistoryPage() {
 
                   {/* Footer: Role */}
                   {showRoleColumn && (
-                    <div className="text-[10px] text-slate-400 font-mono text-right pt-1.5 border-t border-slate-800/40">
-                      Role: <span className="font-bold text-white">{log.userRole}</span>
+                    <div className="mt-2 flex justify-end text-[10px] text-slate-400 font-mono">
+                      <span className="audit-role-pill rounded-md border border-slate-800 px-2 py-1">
+                        {t('roleHeader')}: <span className="font-bold text-white">{log.userRole}</span>
+                      </span>
                     </div>
                   )}
-                </div>
+                </article>
               );
             })
           ) : (
@@ -392,9 +461,9 @@ export default function HistoryPage() {
         </div>
 
         {/* Pagination & Rows Selector Footer */}
-        <div className="px-4 py-3 bg-slate-950/90 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+        <div className="audit-pagination mt-3 rounded-2xl border border-slate-800 bg-slate-900/90 px-4 py-3 shadow-xl flex flex-col sm:mt-0 sm:rounded-none sm:border-0 sm:border-t sm:bg-slate-950/90 sm:shadow-none sm:flex-row items-center justify-between gap-3 text-xs">
           {/* Rows Per Page Dropdown */}
-          <div className="flex items-center gap-2 text-slate-400">
+          <div className="hidden sm:flex items-center gap-2 text-slate-400">
             <span>{t('itemsPerPage')}</span>
             <select
               value={pageSize}
@@ -411,7 +480,7 @@ export default function HistoryPage() {
           </div>
 
           {/* Record Counter */}
-          <div className="text-slate-400 font-mono text-[11px]">
+          <div className="hidden sm:block text-slate-400 font-mono text-[11px]">
             {t('showingRecords')}{' '}
             <strong className="text-cyan-400">{totalItems > 0 ? startIndex + 1 : 0}</strong>{' '}
             -{' '}
@@ -421,7 +490,7 @@ export default function HistoryPage() {
           </div>
 
           {/* Page Controls */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-start">
             <button
               onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
               disabled={safeCurrentPage === 1}

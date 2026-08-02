@@ -3,7 +3,7 @@
  * Model: YOLOv8 Object Detection (Universe Roboflow: fyp-hq4ka/license-plate-malaysia-kqy48)
  * 
  * Production Hardware Execution Policy:
- * Preferred Chain: WebGPU -> WASM (WebGL removed from production chain)
+ * Stable Chain: WASM -> WebGPU (WebGL removed from production chain)
  * Zero silent fallbacks to CV heuristic or remote APIs in production.
  */
 
@@ -72,8 +72,36 @@ export function getActiveDetectorProvider(): ActiveExecutionProvider {
   return activeProvider;
 }
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function releaseOnnxSession(session: any): void {
+  try {
+    session?.release?.();
+  } catch {
+    // Best-effort cleanup for ONNX Runtime Web sessions.
+  }
+  try {
+    session?.dispose?.();
+  } catch {
+    // Older runtime builds expose release(), newer/other builds may expose dispose().
+  }
+}
+
+function markDetectorRuntimeFailure(err: unknown, context: string): void {
+  lastDetectorError = `${context}: ${getErrorMessage(err)}`;
+  detectorStatus = 'FAILED';
+  activeProvider = 'NONE';
+  onnxLoadFailures = MAX_ONNX_FAILURES;
+  const failedSession = localOnnxSession;
+  localOnnxSession = null;
+  releaseOnnxSession(failedSession);
+  console.debug(`[ANPR YoloDetector] ${lastDetectorError}`);
+}
+
 /**
- * Initialize Local ONNX Session with fallback chain: WebGPU -> WASM
+ * Initialize Local ONNX Session with stable chain: WASM -> WebGPU
  */
 export async function initLocalOnnxSession(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
@@ -109,8 +137,8 @@ export async function initLocalOnnxSession(): Promise<boolean> {
       const modelBytes = new Uint8Array(modelBuffer);
 
       const providersToTry: { name: ActiveExecutionProvider; epList: string[] }[] = [
-        ...(webGpuAvailable ? [{ name: 'WebGPU' as const, epList: ['webgpu', 'wasm'] }] : []),
         { name: 'WASM', epList: ['wasm'] },
+        ...(webGpuAvailable ? [{ name: 'WebGPU' as const, epList: ['webgpu', 'wasm'] }] : []),
       ];
       let lastErrDetail = '';
 
@@ -150,7 +178,7 @@ export async function initLocalOnnxSession(): Promise<boolean> {
           return true;
         } catch (err: any) {
           lastErrDetail = err?.message || String(err);
-          console.warn(`[ANPR YoloDetector] Provider ${item.name} failed initialization:`, lastErrDetail);
+          console.debug(`[ANPR YoloDetector] Provider ${item.name} failed initialization:`, lastErrDetail);
         }
       }
 
@@ -160,7 +188,7 @@ export async function initLocalOnnxSession(): Promise<boolean> {
       detectorStatus = 'FAILED';
       activeProvider = 'NONE';
       lastDetectorError = err?.message || String(err);
-      console.warn(`[ANPR YoloDetector] Local ONNX load failed (attempt ${onnxLoadFailures}/${MAX_ONNX_FAILURES}):`, lastDetectorError);
+      console.debug(`[ANPR YoloDetector] Local ONNX load failed (attempt ${onnxLoadFailures}/${MAX_ONNX_FAILURES}):`, lastDetectorError);
       return false;
     }
   })().finally(() => {
@@ -201,7 +229,7 @@ export async function detectMalaysianPlates(
       try {
         return await runLocalOnnxDetection(canvas, minConf, iouThreshold);
       } catch (err) {
-        console.warn('[ANPR YoloDetector] Local ONNX inference error:', err);
+        markDetectorRuntimeFailure(err, 'Local ONNX inference failed');
       }
     }
     // Return empty while ONNX model is initializing or if failed — ZERO silent fallbacks in production
@@ -249,7 +277,8 @@ export async function runBenchmarkDetection(): Promise<boolean> {
       (t as any)?.dispose?.();
     }
     return true;
-  } catch {
+  } catch (err) {
+    markDetectorRuntimeFailure(err, 'YOLOv8 detector benchmark failed');
     return false;
   }
 }

@@ -14,7 +14,6 @@ import {
   XCircle,
   Building2,
   User,
-  Car,
   FileText,
   DollarSign,
   Tag,
@@ -23,6 +22,30 @@ import {
   History,
   X,
 } from 'lucide-react';
+
+function formatSearchTime(isoString: string): string {
+  if (!isoString) return '-';
+  try {
+    const d = new Date(isoString);
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(d)
+      .reduce<Record<string, string>>((acc, part) => {
+        if (part.type !== 'literal') acc[part.type] = part.value;
+        return acc;
+      }, {});
+
+    return `${parts.day} ${parts.month}, ${parts.hour}:${parts.minute}`;
+  } catch {
+    return isoString;
+  }
+}
 
 export default function SearchPage() {
   const { searchVehicles, addHistoryLog, updateVehicle, history } = useStorage();
@@ -37,6 +60,10 @@ export default function SearchPage() {
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const executeSearchRef = useRef<(query: string) => void>(() => undefined);
   const searchHistory = history.filter((log) => log.type === 'SEARCH').slice(0, 6);
+  const mobileSearchHistory = searchHistory.slice(0, 4);
+  const isMalay = language === 'BM';
+  const mobileSearchPlaceholder = isMalay ? 'Masukkan nombor plat' : 'Enter plate number';
+  const mobileSearchLabel = isMalay ? 'Cari' : 'Search';
   const getSearchPlate = (log: (typeof searchHistory)[number]) =>
     log.plate || log.action.match(/(?:Manual Search|Manual Search Plate):\s*([A-Z0-9]+)/i)?.[1] || '-';
   const toggleHistoryDetails = (id: string) => {
@@ -173,10 +200,10 @@ export default function SearchPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-2.5 sm:space-y-6">
+    <div className="max-w-4xl mx-auto space-y-5 sm:space-y-6">
       {/* Header */}
-      <div className="space-y-0.5 sm:space-y-1">
-        <h1 className="text-base sm:text-2xl font-black text-white tracking-wide">
+      <div className="space-y-1">
+        <h1 className="text-2xl sm:text-2xl font-black text-white tracking-wide leading-tight">
           {t('searchTitle')}
         </h1>
       </div>
@@ -184,17 +211,17 @@ export default function SearchPage() {
       {/* Search Bar Container */}
       <form
         onSubmit={handleSearch}
-        className="bg-slate-900/90 border border-cyan-900/50 rounded-xl sm:rounded-2xl p-2.5 sm:p-4 shadow-xl backdrop-blur-md"
+        className="bg-slate-900/90 border border-cyan-900/50 rounded-xl sm:rounded-2xl p-4 shadow-xl backdrop-blur-md"
       >
         {/* Input + Button */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <div className="relative flex-1 min-w-0">
             <input
               type="text"
               value={inputQuery}
               onChange={handleInputChange}
-              placeholder={t('searchPlaceholder')}
-              className="w-full bg-slate-950 border-2 border-cyan-500/40 rounded-lg sm:rounded-xl px-3 py-1.5 sm:py-3 text-sm sm:text-xl font-mono font-black uppercase text-cyan-300 placeholder:text-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 transition-all tracking-wider"
+              placeholder={mobileSearchPlaceholder}
+              className="w-full bg-slate-950 border-2 border-cyan-500/40 rounded-xl px-4 py-3 text-base sm:text-xl font-mono font-black uppercase text-cyan-300 placeholder:text-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 transition-all sm:tracking-wider"
               autoFocus
             />
             {inputQuery && (
@@ -205,19 +232,20 @@ export default function SearchPage() {
           </div>
           <button
             type="submit"
-            className="px-3.5 sm:px-6 py-2 sm:py-3.5 rounded-lg sm:rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs sm:text-sm uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition-all shrink-0 flex items-center justify-center gap-1.5 sm:gap-2"
+            className="w-full sm:w-auto px-5 sm:px-6 py-3.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-sm uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition-all shrink-0 flex items-center justify-center gap-2"
           >
-            <SearchIcon className="w-3.5 h-3.5 sm:w-5 sm:h-5" />
-            <span>{t('searchBtn')}</span>
+            <SearchIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span className="sm:hidden">{mobileSearchLabel}</span>
+            <span className="hidden sm:inline">{t('searchBtn')}</span>
           </button>
         </div>
       </form>
 
-      <div className="bg-slate-900/90 border border-slate-800 rounded-xl sm:rounded-2xl p-3 sm:p-4 shadow-xl space-y-3">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl sm:rounded-2xl p-4 shadow-xl space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-cyan-400" />
-            <h2 className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
+            <h2 className="text-sm font-bold text-white uppercase tracking-wider">
               Search History
             </h2>
           </div>
@@ -226,19 +254,19 @@ export default function SearchPage() {
           </span>
         </div>
 
-        <div className="sm:hidden space-y-2">
-          {searchHistory.length > 0 ? (
-            searchHistory.map((log) => (
+        <div className="sm:hidden space-y-3">
+          {mobileSearchHistory.length > 0 ? (
+            mobileSearchHistory.map((log) => (
               <button
                 key={log.id}
                 type="button"
                 onClick={() => toggleHistoryDetails(log.id)}
-                className="w-full text-left p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5 hover:border-cyan-900/70 transition-all"
+                className="w-full text-left p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5 hover:border-cyan-900/70 transition-all"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono font-black text-cyan-300 text-xs">{getSearchPlate(log)}</span>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate font-mono font-black text-cyan-300 text-lg leading-none">{getSearchPlate(log)}</span>
                   <span
-                    className={`px-2 py-0.5 rounded-md border text-[9px] font-bold uppercase ${
+                    className={`shrink-0 px-2 py-1 rounded-md border text-[10px] font-bold uppercase ${
                       log.statusMatch === 'EXACT'
                         ? 'bg-red-950/70 text-red-300 border-red-800'
                         : log.statusMatch === 'POSSIBLE'
@@ -249,14 +277,14 @@ export default function SearchPage() {
                     {log.statusMatch === 'EXACT' ? 'Found' : log.statusMatch === 'POSSIBLE' ? 'Possible' : 'No Match'}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-300 truncate">{log.note || log.details}</p>
-                <div className="text-[10px] text-slate-500 font-mono">{formatDate(log.timestamp)}</div>
+                <p className="text-[13px] leading-snug text-slate-300">{log.note || log.details}</p>
+                <div className="text-[11px] text-slate-500 font-mono">{formatSearchTime(log.timestamp)}</div>
                 {expandedHistoryId === log.id && (
-                  <div className="mt-2 pt-2 border-t border-slate-800 grid grid-cols-1 gap-1 text-[10px] text-slate-400">
+                  <div className="mt-3 pt-3 border-t border-slate-800 grid grid-cols-1 gap-1.5 text-[11px] text-slate-400">
                     <div><span className="text-slate-500">Action:</span> {log.action}</div>
                     <div><span className="text-slate-500">Details:</span> {log.details}</div>
                     {log.note && <div><span className="text-slate-500">Note:</span> {log.note}</div>}
-                    <div><span className="text-slate-500">Last Dijumpai:</span> {formatDate(log.timestamp)}</div>
+                    <div><span className="text-slate-500">Last Dijumpai:</span> {formatSearchTime(log.timestamp)}</div>
                   </div>
                 )}
               </button>
@@ -337,185 +365,170 @@ export default function SearchPage() {
           {/* 1. EXACT MATCH CRITICAL ALERT CARD */}
           {exactResult ? (
             <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md p-3 sm:p-6 flex items-center justify-center">
-            <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto bg-slate-900 border-2 border-red-500 rounded-xl sm:rounded-2xl p-3 sm:p-6 shadow-2xl glow-danger space-y-2.5 sm:space-y-5">
-              {/* Alert Header */}
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-red-900/50 pb-2 sm:pb-4">
-                <div className="flex items-center gap-2 sm:gap-3">
-                  <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-red-950 border border-red-500/60 flex items-center justify-center text-red-400 animate-pulse shrink-0">
-                    <ShieldAlert className="w-5 h-5 sm:w-7 sm:h-7" />
+            <div className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-red-500/70 bg-slate-900 shadow-2xl shadow-red-950/30">
+              <button
+                type="button"
+                onClick={() => {
+                  setExactResult(null);
+                  setHasSearched(false);
+                }}
+                className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/95 text-slate-400 transition-all hover:border-slate-500 hover:text-white"
+                title={t('closeBtn')}
+                aria-label={t('closeBtn')}
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="space-y-3 p-4 sm:space-y-5 sm:p-6">
+                <div className="flex items-start gap-3 border-b border-red-900/40 pb-3 pr-12 sm:pb-4">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-500/60 bg-red-950 text-red-300 sm:h-10 sm:w-10">
+                    <ShieldAlert className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
                   </div>
-                  <div>
-                    <div className="text-[9px] sm:text-[10px] font-black text-red-400 uppercase tracking-widest">
-                      {t('criticalAlert')}
+                  <div className="min-w-0 space-y-1.5 sm:space-y-2">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-red-300">
+                        {t('criticalAlert')}
+                      </div>
+                      <h2 className="text-lg font-black leading-tight text-white sm:text-2xl">
+                        {t('matchFound')}
+                      </h2>
                     </div>
-                    <h2 className="text-sm sm:text-2xl font-black text-white tracking-wide">
-                      {t('matchFound')}
-                    </h2>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-md border border-red-500/60 bg-red-950 px-2.5 py-1 text-[10px] font-black uppercase text-red-300">
+                        {exactResult.status === 'ACTIVE'
+                          ? t('statusActive')
+                          : exactResult.status === 'FLAGGED'
+                          ? t('statusFlagged')
+                          : exactResult.status === 'PENDING'
+                          ? t('statusPending')
+                          : t('statusCleared')}
+                      </span>
+                      <span className="rounded-md border border-amber-500/60 bg-amber-950 px-2.5 py-1 text-[10px] font-black uppercase text-amber-300">
+                        {exactResult.priority === 'HIGH'
+                          ? t('priorityHigh')
+                          : exactResult.priority === 'MEDIUM'
+                          ? t('priorityMedium')
+                          : t('priorityLow')}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                  <span className="text-[9px] sm:text-xs font-black uppercase px-2 py-0.5 sm:px-3 sm:py-1 rounded-full bg-red-950 text-red-400 border border-red-500/60 animate-pulse">
-                    {exactResult.status}
-                  </span>
-                  <span className="text-[9px] sm:text-xs font-black uppercase px-2 py-0.5 sm:px-3 sm:py-1 rounded-full bg-amber-950 text-amber-400 border border-amber-500/60">
-                    PRIORITY: {exactResult.priority}
-                  </span>
+                <section className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 sm:rounded-2xl sm:p-4">
+                  <div className="grid grid-cols-1 gap-3 sm:flex sm:items-start sm:justify-between sm:gap-4">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        <Tag className="h-3.5 w-3.5 text-cyan-300" />
+                        <span>{t('plateNumber')}</span>
+                      </div>
+                      <div className="font-mono text-2xl font-black leading-none text-cyan-300 sm:text-3xl">
+                        {exactResult.plate}
+                      </div>
+                      <div className="text-sm font-bold text-white">
+                        {exactResult.brand} {exactResult.model}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {exactResult.colour} ({exactResult.year})
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-red-900/60 bg-red-950/30 p-3 sm:min-w-56 sm:text-right">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-red-200 sm:justify-end">
+                        <DollarSign className="h-3.5 w-3.5 text-red-300" />
+                        <span>{t('outstandingAmount')}</span>
+                      </div>
+                      <div className="mt-1 font-mono text-xl font-black leading-none text-red-300 sm:mt-2 sm:text-2xl">
+                        {formatMYR(exactResult.outstandingAmount)}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 sm:rounded-2xl sm:p-4">
+                  <h3 className="mb-3 text-xs font-black uppercase tracking-wider text-slate-300">
+                    {language === 'BM' ? 'Maklumat Kes' : 'Case Details'}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 sm:divide-y sm:divide-slate-800/70">
+                    {[
+                      { label: t('customerName'), value: exactResult.customerName, detail: exactResult.phone, icon: User },
+                      { label: t('financeCompany'), value: exactResult.financeCompany, detail: `Ref: ${exactResult.reference}`, icon: Building2 },
+                      { label: t('caseReference'), value: exactResult.reference, detail: exactResult.remark, icon: FileText },
+                    ].map((item) => {
+                      const DetailIcon = item.icon;
+                      return (
+                        <div key={item.label} className="flex min-w-0 gap-2 sm:gap-3 sm:py-3 sm:first:pt-0 sm:last:pb-0">
+                          <DetailIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-300 sm:h-4 sm:w-4" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[9px] font-bold uppercase tracking-wider text-slate-500 sm:text-[10px]">
+                              {item.label}
+                            </div>
+                            <div className="mt-1 truncate text-sm font-bold leading-tight text-white">
+                              {item.value}
+                            </div>
+                            <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-400 sm:text-xs">
+                              {item.detail}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section className="hidden rounded-2xl border border-cyan-900/50 bg-slate-950/70 p-4 sm:block">
+                  <label className="block text-xs font-bold text-cyan-300">
+                    {t('notaTindakanCol')} ({language === 'BM' ? 'Pilihan' : 'Optional'})
+                  </label>
+                  <input
+                    type="text"
+                    value={customActionNote}
+                    onChange={(e) => setCustomActionNote(e.target.value)}
+                    placeholder={t('notaTindakanPlaceholder')}
+                    className="mt-2 w-full rounded-xl border border-slate-800 bg-slate-900 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 transition-all focus:outline-none focus:border-cyan-500"
+                  />
+                </section>
+
+                <div className="grid grid-cols-3 gap-2 border-t border-slate-800 pt-3 sm:gap-3 sm:pt-4">
                   <button
-                    type="button"
-                    onClick={() => {
-                      setExactResult(null);
-                      setHasSearched(false);
-                    }}
-                    className="p-1.5 rounded-lg bg-slate-950 border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-all"
-                    title={t('closeBtn')}
+                    onClick={handleMarkAction}
+                    className={`min-h-11 rounded-xl border px-2 py-2 text-[11px] font-black leading-tight flex flex-col items-center justify-center gap-1 transition-all sm:min-h-12 sm:flex-row sm:px-4 sm:py-3 sm:text-sm ${
+                      exactResult.status === 'FLAGGED'
+                        ? 'bg-red-950 border-red-500 text-red-200 shadow-sm'
+                        : 'bg-red-950/70 hover:bg-red-900 border-red-800 text-red-200'
+                    }`}
                   >
-                    <X className="w-4 h-4" />
+                    <BookmarkCheck className="w-4 h-4 text-red-300" />
+                    <span>{t('markAction')}</span>
                   </button>
+
+                  {(role === 'ADMIN' || role === 'SUPER_ADMIN') && (
+                    <>
+                      <button
+                        onClick={handleMarkPending}
+                        className={`min-h-11 rounded-xl border px-2 py-2 text-[11px] font-black leading-tight flex flex-col items-center justify-center gap-1 transition-all sm:min-h-12 sm:flex-row sm:px-4 sm:py-3 sm:text-sm ${
+                          exactResult.status === 'PENDING'
+                            ? 'bg-amber-950 border-amber-500 text-amber-200 shadow-sm'
+                            : 'bg-amber-950/60 hover:bg-amber-900 border-amber-800 text-amber-200'
+                        }`}
+                      >
+                        <Clock className="w-4 h-4 text-amber-300" />
+                        <span>{t('statusPending')}</span>
+                      </button>
+
+                      <button
+                        onClick={handleMarkCleared}
+                        className={`min-h-11 rounded-xl border px-2 py-2 text-[11px] font-black leading-tight flex flex-col items-center justify-center gap-1 transition-all sm:min-h-12 sm:flex-row sm:px-4 sm:py-3 sm:text-sm ${
+                          exactResult.status === 'CLEARED'
+                            ? 'bg-emerald-950 border-emerald-500 text-emerald-200 shadow-sm'
+                            : 'bg-emerald-950/60 hover:bg-emerald-900 border-emerald-800 text-emerald-200'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                        <span>{t('statusCleared')}</span>
+                      </button>
+                    </>
+                  )}
                 </div>
-              </div>
-
-              {/* Vehicle Dossier Grid - 2 columns on mobile, 3 on desktop */}
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
-                {/* Plate */}
-                <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-slate-800 space-y-0.5">
-                  <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                    <Tag className="w-3 h-3 text-cyan-400" />
-                    <span>{t('plateNumber')}</span>
-                  </div>
-                  <div className="text-base sm:text-2xl font-black font-mono text-cyan-400">
-                    {exactResult.plate}
-                  </div>
-                </div>
-
-                {/* Outstanding Amount */}
-                <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-red-900/50 space-y-0.5">
-                  <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                    <DollarSign className="w-3 h-3 text-red-400" />
-                    <span>{t('outstandingAmount')}</span>
-                  </div>
-                  <div className="text-base sm:text-xl font-black text-red-400 font-mono">
-                    {formatMYR(exactResult.outstandingAmount)}
-                  </div>
-                </div>
-
-                {/* Customer */}
-                <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-slate-800 space-y-0.5">
-                  <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                    <User className="w-3 h-3 text-blue-400" />
-                    <span>{t('customerName')}</span>
-                  </div>
-                  <div className="text-xs sm:text-base font-bold text-white truncate">
-                    {exactResult.customerName}
-                  </div>
-                  <div className="text-[9px] sm:text-[11px] text-slate-400 font-mono truncate">
-                    {exactResult.phone}
-                  </div>
-                </div>
-
-                {/* Vehicle Model & Color */}
-                <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-slate-800 space-y-0.5">
-                  <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                    <Car className="w-3 h-3 text-purple-400" />
-                    <span>{t('vehicleDetails')}</span>
-                  </div>
-                  <div className="text-xs sm:text-base font-bold text-white truncate">
-                    {exactResult.brand} {exactResult.model}
-                  </div>
-                  <div className="text-[9px] sm:text-[11px] text-slate-400 truncate">
-                    {exactResult.colour} ({exactResult.year})
-                  </div>
-                </div>
-
-                {/* Finance Company */}
-                <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-slate-800 space-y-0.5">
-                  <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                    <Building2 className="w-3 h-3 text-emerald-400" />
-                    <span>{t('financeCompany')}</span>
-                  </div>
-                  <div className="text-xs sm:text-base font-bold text-white truncate">
-                    {exactResult.financeCompany}
-                  </div>
-                  <div className="text-[9px] sm:text-[11px] text-slate-400 font-mono truncate">
-                    Ref: {exactResult.reference}
-                  </div>
-                </div>
-
-                {/* Case Reference */}
-                <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-slate-800 space-y-0.5">
-                  <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                    <FileText className="w-3 h-3 text-amber-400" />
-                    <span>{t('caseReference')}</span>
-                  </div>
-                  <div className="text-xs sm:text-base font-bold font-mono text-slate-200 truncate">
-                    {exactResult.reference}
-                  </div>
-                </div>
-              </div>
-
-              {/* Remarks */}
-              <div className="p-2 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase mb-0.5">
-                  {t('remarks')}
-                </div>
-                <p className="text-[11px] sm:text-xs text-slate-300 italic truncate">{exactResult.remark}</p>
-              </div>
-
-              {/* Optional Nota Tindakan Field */}
-              <div className="p-2.5 sm:p-3.5 rounded-lg sm:rounded-xl bg-slate-950 border border-cyan-900/50 space-y-1">
-                <label className="block text-[11px] sm:text-xs font-bold text-cyan-400">
-                  {t('notaTindakanCol')} ({language === 'BM' ? 'Pilihan' : 'Optional'})
-                </label>
-                <input
-                  type="text"
-                  value={customActionNote}
-                  onChange={(e) => setCustomActionNote(e.target.value)}
-                  placeholder={t('notaTindakanPlaceholder')}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-all font-sans"
-                />
-              </div>
-
-              {/* Action Buttons - Role-based permissions */}
-              <div className="pt-1.5 sm:pt-2 border-t border-slate-800 flex flex-wrap items-center gap-2">
-                <button
-                  onClick={handleMarkAction}
-                  className={`flex-1 sm:flex-initial px-4 py-2 sm:py-2.5 rounded-lg sm:rounded-xl text-xs font-bold border flex items-center justify-center gap-2 transition-all ${
-                    exactResult.status === 'FLAGGED'
-                      ? 'bg-red-950 border-red-500 text-red-300 shadow-sm'
-                      : 'bg-red-950/60 hover:bg-red-900 border-red-800 text-red-200'
-                  }`}
-                >
-                  <BookmarkCheck className="w-4 h-4 text-red-400" />
-                  <span>{t('markAction')}</span>
-                </button>
-
-                {(role === 'ADMIN' || role === 'SUPER_ADMIN') && (
-                  <>
-                    <button
-                      onClick={handleMarkPending}
-                      className={`flex-1 sm:flex-initial px-4 py-2 sm:py-2.5 rounded-lg sm:rounded-xl text-xs font-bold border flex items-center justify-center gap-2 transition-all ${
-                        exactResult.status === 'PENDING'
-                          ? 'bg-amber-950 border-amber-500 text-amber-300 shadow-sm'
-                          : 'bg-amber-950/60 hover:bg-amber-900 border-amber-800 text-amber-200'
-                      }`}
-                    >
-                      <Clock className="w-4 h-4 text-amber-400" />
-                      <span>{t('statusPending')}</span>
-                    </button>
-
-                    <button
-                      onClick={handleMarkCleared}
-                      className={`flex-1 sm:flex-initial px-4 py-2 sm:py-2.5 rounded-lg sm:rounded-xl text-xs font-bold border flex items-center justify-center gap-2 transition-all ${
-                        exactResult.status === 'CLEARED'
-                          ? 'bg-emerald-950 border-emerald-500 text-emerald-300 shadow-sm'
-                          : 'bg-emerald-950/60 hover:bg-emerald-900 border-emerald-800 text-emerald-200'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                      <span>{t('statusCleared')}</span>
-                    </button>
-                  </>
-                )}
               </div>
             </div>
             </div>

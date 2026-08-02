@@ -107,6 +107,7 @@ export async function getOrt(): Promise<any> {
 export function configureOrtWasm(ort: any, useWebGpuLoader = false): void {
   if (!ort?.env?.wasm) return;
 
+  ort.env.logLevel = 'error';
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
   ort.env.wasm.wasmPaths = {

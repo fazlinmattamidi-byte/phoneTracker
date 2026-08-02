@@ -5,7 +5,7 @@
  * UNINITIALIZED -> LOADING_MODELS -> VALIDATING_MODELS -> BENCHMARKING_DEVICE -> READY_WEBGPU / READY_WASM / DEGRADED_PERFORMANCE / DETECTOR_UNAVAILABLE / OCR_UNAVAILABLE / RUNTIME_ERROR
  * 
  * Hardware Execution Policy:
- * Preferred Chain: WebGPU -> WASM (WebGL removed from production chain)
+ * Stable Chain: WASM -> WebGPU (WebGL removed from production chain)
  * 
  * WASM Admission Benchmark Thresholds (Configurable):
  * - Detector P95 latency < 500 ms

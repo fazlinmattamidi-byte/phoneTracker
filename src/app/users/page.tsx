@@ -129,11 +129,11 @@ export default function UsersPage() {
     : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-black text-white tracking-wide">
+          <h1 className="text-2xl sm:text-2xl font-black text-white tracking-wide leading-tight">
             {t('manageUsersTitle')}
           </h1>
         </div>
@@ -141,7 +141,7 @@ export default function UsersPage() {
         {canManageUsers && (
           <button
             onClick={openAddModal}
-            className="px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-500/20 transition-all"
+            className="px-4 py-2.5 sm:py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 transition-all"
           >
             <UserPlus className="w-4 h-4" />
             <span>{t('addUser')}</span>
@@ -154,20 +154,20 @@ export default function UsersPage() {
         {/* Mobile View: User Cards */}
         <div className="sm:hidden p-3 space-y-2.5">
           {visibleUsers.map((u) => (
-            <div key={u.id} className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-full bg-slate-800 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold text-xs uppercase overflow-hidden shrink-0">
+            <div key={u.id} className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-slate-800 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold text-sm uppercase overflow-hidden shrink-0">
                     {u.name.charAt(0)}
                   </div>
-                  <div>
-                    <div className="font-bold text-xs text-white">{u.name}</div>
-                    <div className="text-[10px] text-slate-400 font-mono">{u.email}</div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm text-white truncate">{u.name}</div>
+                    <div className="text-[11px] text-slate-400 font-mono truncate">{u.email}</div>
                   </div>
                 </div>
                 <button
                   onClick={() => canManageUsers && toggleUserStatus(u.id)}
-                  className={`inline-flex items-center justify-center w-20 h-5.5 rounded text-[9px] font-black uppercase tracking-wider text-center ${
+                  className={`inline-flex shrink-0 items-center justify-center rounded-md px-2 py-1 text-[10px] font-black uppercase tracking-wider text-center ${
                     u.status === 'ACTIVE'
                       ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
                       : 'bg-red-950 text-red-400 border border-red-800'
@@ -177,9 +177,9 @@ export default function UsersPage() {
                 </button>
               </div>
 
-              <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/60">
+              <div className="flex items-center justify-between gap-3 text-xs pt-2.5 border-t border-slate-800/60">
                 <span
-                  className={`inline-flex items-center justify-center w-28 h-5.5 rounded-full text-[9px] font-bold uppercase tracking-wider text-center whitespace-nowrap ${
+                  className={`inline-flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-center whitespace-nowrap ${
                     u.role === 'SUPER_ADMIN'
                       ? 'bg-cyan-950 text-cyan-400 border border-cyan-800'
                       : u.role === 'ADMIN'
@@ -189,38 +189,42 @@ export default function UsersPage() {
                 >
                   {u.role}
                 </span>
-                <span className="text-[10px] font-mono text-slate-400">{u.phone}</span>
+                <span className="min-w-0 truncate text-[11px] font-mono text-slate-400">{u.phone}</span>
               </div>
 
               {canManageUsers && (
-                <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-800/40">
+                <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-slate-800/40">
                   <button
                     onClick={() => setViewingUser(u)}
-                    className="p-1 rounded-lg bg-slate-800 text-slate-300 hover:text-cyan-400 text-[10px] font-bold flex items-center gap-1"
+                    className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-cyan-400 text-[10px] font-bold flex items-center justify-center"
+                    aria-label="View user"
+                    title="View"
                   >
                     <Eye className="w-3 h-3 text-cyan-400" />
-                    <span>View</span>
                   </button>
                   <button
                     onClick={() => openEditModal(u)}
-                    className="p-1 rounded-lg bg-slate-800 text-slate-300 hover:text-cyan-400 text-[10px] font-bold flex items-center gap-1"
+                    className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-cyan-400 text-[10px] font-bold flex items-center justify-center"
+                    aria-label="Edit user"
+                    title="Edit"
                   >
                     <Edit2 className="w-3 h-3 text-cyan-400" />
-                    <span>Edit</span>
                   </button>
                   <button
                     onClick={() => setResetPassUser(u)}
-                    className="p-1 rounded-lg bg-slate-800 text-slate-300 hover:text-amber-400 text-[10px] font-bold flex items-center gap-1"
+                    className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-amber-400 text-[10px] font-bold flex items-center justify-center"
+                    aria-label="Reset password"
+                    title="Reset"
                   >
                     <Key className="w-3 h-3 text-amber-400" />
-                    <span>Reset</span>
                   </button>
                   <button
                     onClick={() => setDeletingUserId(u.id)}
-                    className="p-1 rounded-lg bg-red-950/80 text-red-400 hover:bg-red-900 text-[10px] font-bold flex items-center gap-1"
+                    className="p-2 rounded-lg bg-red-950/80 text-red-400 hover:bg-red-900 text-[10px] font-bold flex items-center justify-center"
+                    aria-label="Delete user"
+                    title="Delete"
                   >
                     <Trash2 className="w-3 h-3" />
-                    <span>Delete</span>
                   </button>
                 </div>
               )}
@@ -343,8 +347,8 @@ export default function UsersPage() {
 
       {/* VIEW USER DETAIL MODAL */}
       {viewingUser && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-5 w-full max-w-3xl shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-4 sm:p-5 w-full max-w-3xl shadow-2xl space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
             <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-11 h-11 rounded-full bg-slate-800 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-black uppercase shrink-0">
@@ -402,13 +406,13 @@ export default function UsersPage() {
             </div>
 
             {canManageUsers && (
-              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-800 pt-3">
+              <div className="grid grid-cols-1 gap-2 border-t border-slate-800 pt-3 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
                 <button
                   onClick={() => {
                     setViewingUser(null);
                     openEditModal(viewingUser);
                   }}
-                  className="px-3 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold hover:bg-slate-700 flex items-center gap-2"
+                  className="px-3 py-2.5 sm:py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold hover:bg-slate-700 flex items-center justify-center gap-2"
                 >
                   <Edit2 className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Edit Profile</span>
@@ -418,14 +422,14 @@ export default function UsersPage() {
                     setResetPassUser(viewingUser);
                     setViewingUser(null);
                   }}
-                  className="px-3 py-2 rounded-xl bg-amber-950 text-amber-300 border border-amber-800 text-xs font-bold hover:bg-amber-900 flex items-center gap-2"
+                  className="px-3 py-2.5 sm:py-2 rounded-xl bg-amber-950 text-amber-300 border border-amber-800 text-xs font-bold hover:bg-amber-900 flex items-center justify-center gap-2"
                 >
                   <Key className="w-3.5 h-3.5" />
                   <span>Reset Password</span>
                 </button>
                 <button
                   onClick={() => toggleUserStatus(viewingUser.id)}
-                  className="px-3 py-2 rounded-xl bg-slate-950 text-slate-300 border border-slate-700 text-xs font-bold hover:border-amber-700 hover:text-amber-300 flex items-center gap-2"
+                  className="px-3 py-2.5 sm:py-2 rounded-xl bg-slate-950 text-slate-300 border border-slate-700 text-xs font-bold hover:border-amber-700 hover:text-amber-300 flex items-center justify-center gap-2"
                 >
                   <Ban className="w-3.5 h-3.5" />
                   <span>{viewingUser.status === 'ACTIVE' ? 'Disable' : 'Enable'}</span>
@@ -438,8 +442,8 @@ export default function UsersPage() {
 
       {/* ADD / EDIT USER MODAL */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-cyan-900/50 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h2 className="text-lg font-bold text-white">
                 {editingUser ? t('editUser') : t('addUser')}
@@ -526,7 +530,7 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 sm:flex sm:items-center sm:justify-end">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
@@ -548,8 +552,8 @@ export default function UsersPage() {
 
       {/* DELETE USER CONFIRMATION MODAL */}
       {deletingUserId && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-900/60 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 text-center">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-red-900/60 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 text-center max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
             <div className="w-12 h-12 rounded-xl bg-red-950 border border-red-800 flex items-center justify-center mx-auto text-red-400">
               <Trash2 className="w-6 h-6" />
             </div>
@@ -578,8 +582,8 @@ export default function UsersPage() {
 
       {/* RESET PASSWORD MODAL */}
       {resetPassUser && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-900/60 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-amber-900/60 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <Key className="w-5 h-5 text-amber-400" />
@@ -611,7 +615,7 @@ export default function UsersPage() {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 sm:flex sm:items-center sm:justify-end">
                 <button
                   type="button"
                   onClick={() => setResetPassUser(null)}

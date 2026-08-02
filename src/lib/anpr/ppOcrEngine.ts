@@ -3,7 +3,7 @@
  * Model: PP-OCRv4 / PP-OCRv5 Recognition (public/models/ppocr-rec.onnx)
  * 
  * Production Hardware Execution Policy:
- * Fallback Chain: WebGPU -> WASM (WebGL removed from production chain)
+ * Stable Chain: WASM -> WebGPU (WebGL removed from production chain)
  * Dynamic import caching & zero-GC canvas reuse
  * Guaranteed CPU/GPU memory disposal in try/finally blocks
  */
@@ -64,7 +64,7 @@ export function getActivePpOcrProvider(): ActiveOcrProvider {
 }
 
 /**
- * Initialize PP-OCR ONNX Session with fallback chain: WebGPU -> WASM
+ * Initialize PP-OCR ONNX Session with stable chain: WASM -> WebGPU
  */
 export async function initPpOcrSession(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
@@ -110,9 +110,9 @@ export async function initPpOcrSession(): Promise<boolean> {
 
       let lastErrDetail = '';
       const configsToTry = [
-        ...(webGpuAvailable ? [{ epList: ['webgpu', 'wasm'], opt: 'all', name: 'WebGPU' as ActiveOcrProvider }] : []),
         { epList: ['wasm'], opt: 'all', name: 'WASM' as ActiveOcrProvider },
         { epList: ['wasm'], opt: 'basic', name: 'WASM' as ActiveOcrProvider },
+        ...(webGpuAvailable ? [{ epList: ['webgpu', 'wasm'], opt: 'all', name: 'WebGPU' as ActiveOcrProvider }] : []),
       ];
 
       for (const config of configsToTry) {
@@ -148,7 +148,7 @@ export async function initPpOcrSession(): Promise<boolean> {
           return true;
         } catch (err: any) {
           lastErrDetail = err?.message || String(err);
-          console.warn(`[PP-OCR] Provider ${config.name} (opt: ${config.opt}) failed:`, lastErrDetail);
+          console.debug(`[PP-OCR] Provider ${config.name} (opt: ${config.opt}) failed:`, lastErrDetail);
         }
       }
 
@@ -157,7 +157,7 @@ export async function initPpOcrSession(): Promise<boolean> {
       sessionLoadFailures++;
       activeOcrProvider = 'NONE';
       lastPpOcrError = err?.message || String(err);
-      console.warn(`[PP-OCR] Failed to initialize ONNX session:`, lastPpOcrError);
+      console.debug(`[PP-OCR] Failed to initialize ONNX session:`, lastPpOcrError);
       return false;
     }
   })().finally(() => {
