@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
+  SwitchCamera,
   Video,
   Volume2,
   VolumeX,
@@ -33,6 +34,7 @@ import {
   validateDetector,
   getActiveDetectorProvider,
   ActiveExecutionProvider,
+  DetectedPlateBox,
 } from '@/lib/anpr/yoloDetector';
 import {
   generateAdaptiveCrops,
@@ -44,6 +46,14 @@ import {
   scaleBoundingBox,
 } from '@/lib/anpr/imageProcessor';
 import { BestFrameSelector } from '@/lib/anpr/bestFrameSelector';
+import {
+  VehicleFrameBuffer,
+  VehicleMotionDetector,
+  combinePlateDetectionsWithNms,
+  combineVehicleDetections,
+  expandPlateDetectionsToVehicleDetections,
+  mapVehiclePlateDetectionsToFrame,
+} from '@/lib/anpr/vehicleFirstPipeline';
 import { recognizePlateFromCanvas } from '@/lib/anpr/ocrEngine';
 import { addOcrVoteToTrack, evaluateConsensus } from '@/lib/anpr/consensus';
 import {
@@ -132,6 +142,9 @@ type AudioWindow = Window &
 type SlotScannerRuntime = {
   tracker: PlateTracker;
   bestFrameSelector: BestFrameSelector;
+  vehicleTracker: PlateTracker;
+  vehicleFrameBuffer: VehicleFrameBuffer;
+  vehicleMotionDetector: VehicleMotionDetector;
   processingCanvas: HTMLCanvasElement | null;
   lastMaintenanceTs: number;
 };
@@ -141,6 +154,8 @@ type SlotMetrics = {
   detFrames: number;
   platesVisible: number;
   activeTracks: number;
+  vehicleTracks: number;
+  vehicleFramesBuffered: number;
   tracks: ActiveTrack[];
 };
 
@@ -227,6 +242,12 @@ type ScannerRuntimeMetrics = {
   qualityCorrectableRecoveredCount: number;
   bestFrameReplacementCount: number;
   tracksWaitingForBetterCrop: number;
+  vehicleTracksActive: number;
+  vehicleFramesBuffered: number;
+  vehicleMotionDetectionCount: number;
+  vehicleSeedDetectionCount: number;
+  vehiclePlateSearchCount: number;
+  vehicleRecoveredPlateCount: number;
   heuristicQualityUsageCount: number;
   onnxQualityUsageCount: number;
   qualityRejectionReasons: Record<string, number>;
@@ -541,6 +562,12 @@ function createInitialRuntimeMetrics(deviceTier: DeviceTier = 'B'): ScannerRunti
     qualityCorrectableRecoveredCount: 0,
     bestFrameReplacementCount: 0,
     tracksWaitingForBetterCrop: 0,
+    vehicleTracksActive: 0,
+    vehicleFramesBuffered: 0,
+    vehicleMotionDetectionCount: 0,
+    vehicleSeedDetectionCount: 0,
+    vehiclePlateSearchCount: 0,
+    vehicleRecoveredPlateCount: 0,
     heuristicQualityUsageCount: 0,
     onnxQualityUsageCount: 0,
     qualityRejectionReasons: {},
@@ -1044,6 +1071,8 @@ const OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE = 0.50;
 const OCR_QUICK_DB_MIN_SCORE = 0.58;
 const OCR_QUICK_DB_MIN_CONFIDENCE = 0.26;
 const OCR_DESKEW_MIN_ANGLE_RAD = 0.055;
+const VEHICLE_FRAME_SAMPLE_MS = 120;
+const VEHICLE_BUFFER_PLATE_CONFIDENCE_DELTA = 0.08;
 const MOTION_NORMAL_MAX = 0.15;
 const MOTION_UNSTABLE_MAX = 0.30;
 const MOTION_COLLECT_ONLY_MAX = 0.50;
@@ -1581,6 +1610,8 @@ export default function ScannerPage() {
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [mobileCameraZoom, setMobileCameraZoom] = useState(1);
+  const [mobileFacingMode, setMobileFacingMode] = useState<'user' | 'environment'>('environment');
+  const mobileFacingModeRef = useRef<'user' | 'environment'>('environment');
   const [scannerReloadNotice, setScannerReloadNotice] = useState<ScannerReloadNotice | null>(null);
   const [cameraError, setCameraError] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -1619,6 +1650,9 @@ export default function ScannerPage() {
       slotRuntimesRef.current[slotId] = {
         tracker: new PlateTracker(20, 8),
         bestFrameSelector: new BestFrameSelector(),
+        vehicleTracker: new PlateTracker(30, 12, 1),
+        vehicleFrameBuffer: new VehicleFrameBuffer(),
+        vehicleMotionDetector: new VehicleMotionDetector(),
         processingCanvas: null,
         lastMaintenanceTs: 0,
       };
@@ -1634,6 +1668,8 @@ export default function ScannerPage() {
         detFrames: 0,
         platesVisible: 0,
         activeTracks: 0,
+        vehicleTracks: 0,
+        vehicleFramesBuffered: 0,
         tracks: [],
       };
     }
@@ -1837,10 +1873,20 @@ export default function ScannerPage() {
         acc.detFrames += item.detFrames;
         acc.platesVisible += item.platesVisible;
         acc.activeTracks += item.activeTracks;
+        acc.vehicleTracks += item.vehicleTracks;
+        acc.vehicleFramesBuffered += item.vehicleFramesBuffered;
         acc.tracks.push(...item.tracks);
         return acc;
       },
-      { camFrames: 0, detFrames: 0, platesVisible: 0, activeTracks: 0, tracks: [] as ActiveTrack[] }
+      {
+        camFrames: 0,
+        detFrames: 0,
+        platesVisible: 0,
+        activeTracks: 0,
+        vehicleTracks: 0,
+        vehicleFramesBuffered: 0,
+        tracks: [] as ActiveTrack[],
+      }
     );
 
     setCamFps(aggregate.camFrames);
@@ -1848,6 +1894,8 @@ export default function ScannerPage() {
     setPlatesVisible(aggregate.platesVisible);
     setActiveTracksCount(aggregate.activeTracks);
     setTracksList(aggregate.tracks);
+    runtimeMetricsRef.current.vehicleTracksActive = aggregate.vehicleTracks;
+    runtimeMetricsRef.current.vehicleFramesBuffered = aggregate.vehicleFramesBuffered;
     runtimeMetricsRef.current.memoryCurrentMb = getUsedHeapMb() ?? runtimeMetricsRef.current.memoryCurrentMb;
     runtimeMetricsRef.current.cameraHealth = createCameraHealthSnapshot(
       environmentStatsRef.current,
@@ -1871,6 +1919,9 @@ export default function ScannerPage() {
     Object.values(slotRuntimesRef.current).forEach((runtime) => {
       runtime.tracker.clear();
       runtime.bestFrameSelector.resetAll();
+      runtime.vehicleTracker.clear();
+      runtime.vehicleFrameBuffer.resetAll();
+      runtime.vehicleMotionDetector.reset();
       runtime.processingCanvas = null;
       runtime.lastMaintenanceTs = 0;
     });
@@ -2175,7 +2226,8 @@ export default function ScannerPage() {
     try {
       if (operationId !== cameraOperationIdRef.current) return false;
 
-      const streamKey = slot.deviceId || 'default-camera';
+      const facingMode = isMobileScannerDevice() ? mobileFacingModeRef.current : undefined;
+      const streamKey = slot.deviceId || `default-camera-${facingMode ?? 'any'}`;
       let stream = activeStreamsRef.current[streamKey];
 
       if (!stream) {
@@ -2184,7 +2236,8 @@ export default function ScannerPage() {
           getActiveCameraCaptureConfig(
             adaptiveConfigRef.current.camera,
             runtimeMetricsRef.current.adaptationLevel
-          )
+          ),
+          facingMode
         );
         if (operationId !== cameraOperationIdRef.current) {
           stream.getTracks().forEach((track) => {
@@ -2334,6 +2387,16 @@ export default function ScannerPage() {
   const handleStopScanning = () => {
     stopCamera();
     setCurrentPlate('READY');
+  };
+
+  const handleFlipCamera = () => {
+    const nextMode = mobileFacingModeRef.current === 'environment' ? 'user' : 'environment';
+    mobileFacingModeRef.current = nextMode;
+    setMobileFacingMode(nextMode);
+    // Stop existing streams and restart with new facing mode
+    const wasScanning = isScanningRef.current;
+    stopCamera({ preserveScanningState: wasScanning, invalidatePendingStarts: false });
+    void startVisibleCamerasRef.current({ resumeScanning: wasScanning });
   };
 
   const handleAddCamera = async () => {
@@ -2650,6 +2713,10 @@ export default function ScannerPage() {
                 maxBufferSize: nextConfig.buffer.maxSize,
                 maxEntryAgeMs: nextConfig.buffer.maxEntryAgeMs,
               });
+              runtime.vehicleFrameBuffer.configure({
+                maxFramesPerVehicle: Math.max(10, nextConfig.buffer.maxSize + 2),
+                maxEntryAgeMs: Math.max(2500, nextConfig.buffer.maxEntryAgeMs),
+              });
             });
 
             void applyActiveCameraConstraints();
@@ -2809,14 +2876,112 @@ export default function ScannerPage() {
           Math.round((scannerSettings.lostTrackTimeout || INITIAL_SETTINGS.lostTrackTimeout) * adaptiveConfigRef.current.track.lifetimeMultiplier)
         );
         runtime.tracker.setMaxActiveTracks(scannerSettings.maxTracks || INITIAL_SETTINGS.maxTracks);
-        let detectedPlates: Awaited<ReturnType<typeof detectMalaysianPlates>> = [];
+        runtime.vehicleTracker.setLostTrackTimeout(
+          Math.max(
+            24,
+            Math.round((scannerSettings.lostTrackTimeout || INITIAL_SETTINGS.lostTrackTimeout) * adaptiveConfigRef.current.track.lifetimeMultiplier * 1.5)
+          )
+        );
+        runtime.vehicleTracker.setMaxActiveTracks(Math.max(8, (scannerSettings.maxTracks || INITIAL_SETTINGS.maxTracks) * 2));
+        runtime.vehicleFrameBuffer.configure({
+          maxFramesPerVehicle: Math.max(10, adaptiveConfig.buffer.maxSize + 2),
+          maxEntryAgeMs: Math.max(2500, adaptiveConfig.buffer.maxEntryAgeMs),
+        });
+
+        const basePlateMinConfidence = Math.max(scannerSettings.detectionThreshold, adaptiveConfigRef.current.detector.minConfidence);
+        let motionVehicleDetections: ReturnType<VehicleMotionDetector['detect']> = [];
+        try {
+          motionVehicleDetections = runtime.vehicleMotionDetector.detect(processingCanvas);
+        } catch (err) {
+          console.warn(`[Scanner:${slotId}] Vehicle motion sampling failed:`, err);
+        }
+        runtimeMetricsRef.current.vehicleMotionDetectionCount += motionVehicleDetections.length;
+
+        let detectedPlates: DetectedPlateBox[] = [];
+        const bufferedPlateDetections: DetectedPlateBox[] = [];
 
         try {
           detectedPlates = await detectMalaysianPlates(processingCanvas, {
-            minConfidence: Math.max(scannerSettings.detectionThreshold, adaptiveConfigRef.current.detector.minConfidence),
+            minConfidence: basePlateMinConfidence,
             enginePreference: scannerSettings.detectorEngine,
             developerMode: scannerSettings.debugMode,
           });
+
+          const seedVehicleDetections = expandPlateDetectionsToVehicleDetections(
+            detectedPlates,
+            processingCanvas.width,
+            processingCanvas.height
+          );
+          runtimeMetricsRef.current.vehicleSeedDetectionCount += seedVehicleDetections.length;
+          const vehicleDetections = combineVehicleDetections(
+            [...motionVehicleDetections, ...seedVehicleDetections],
+            processingCanvas.width,
+            processingCanvas.height
+          );
+          const vehicleTracks = runtime.vehicleTracker.updateTracks(
+            vehicleDetections.map((vehicleBox) => ({
+              x: vehicleBox.bbox.x,
+              y: vehicleBox.bbox.y,
+              width: vehicleBox.bbox.width,
+              height: vehicleBox.bbox.height,
+              confidence: vehicleBox.confidence,
+            }))
+          );
+          const confirmedVehicleTracks = runtime.vehicleTracker.getActiveTracks(true);
+          const activeVehicleTrackNumbers = new Set(confirmedVehicleTracks.map((track) => track.trackNumber));
+          const vehicleSampleInterval = Math.round(
+            getTierCropSampleIntervalMs(VEHICLE_FRAME_SAMPLE_MS, runtimeMetricsRef.current.deviceTier) *
+              adaptiveConfig.buffer.cropSampleIntervalMultiplier
+          );
+
+          confirmedVehicleTracks.forEach((track) => {
+            if (!isTrackAvailableForReading(track)) return;
+            if (track.lastCropSampledAt && sampleNow - track.lastCropSampledAt < vehicleSampleInterval) return;
+
+            runtime.vehicleFrameBuffer.addFrameCandidate(track.trackNumber, processingCanvas, track.bbox, {
+              trackStability: track.trackConfidence ?? 0.55,
+              motionScore: track.motionScore ?? 0,
+              detectorConfidence: track.bbox.confidence,
+              now: sampleNow,
+            });
+            track.lastCropSampledAt = sampleNow;
+          });
+
+          const vehicleSearchLimit = detectedPlates.length === 0
+            ? adaptiveConfig.ocr.maxCandidateCrops <= 1
+              ? 1
+              : 3
+            : runtimeMetricsRef.current.deviceTier === 'A'
+            ? 2
+            : 1;
+          const vehicleSearchCandidates = runtime.vehicleFrameBuffer.getSearchCandidates(activeVehicleTrackNumbers, {
+            limit: vehicleSearchLimit,
+            now: sampleNow,
+            includeRecentlySearched: detectedPlates.length === 0,
+          });
+
+          for (const candidate of vehicleSearchCandidates) {
+            runtime.vehicleFrameBuffer.markPlateSearch(candidate, sampleNow);
+            runtimeMetricsRef.current.vehiclePlateSearchCount++;
+            const recovered = await detectMalaysianPlates(candidate.canvas, {
+              minConfidence: Math.max(0.20, basePlateMinConfidence - VEHICLE_BUFFER_PLATE_CONFIDENCE_DELTA),
+              enginePreference: scannerSettings.detectorEngine,
+              developerMode: scannerSettings.debugMode,
+            });
+            const mappedRecovered = mapVehiclePlateDetectionsToFrame(candidate, recovered);
+            bufferedPlateDetections.push(...mappedRecovered);
+            runtimeMetricsRef.current.vehicleRecoveredPlateCount += mappedRecovered.length;
+          }
+
+          detectedPlates = combinePlateDetectionsWithNms(
+            detectedPlates,
+            bufferedPlateDetections,
+            processingCanvas.width,
+            processingCanvas.height
+          );
+
+          metrics.vehicleTracks = vehicleTracks.filter(isTrackDrawable).length;
+          metrics.vehicleFramesBuffered = runtime.vehicleFrameBuffer.getBufferedFrameCount();
         } catch (err) {
           console.warn(`[Scanner:${slotId}] Detector frame failed:`, err);
         }
@@ -2874,8 +3039,13 @@ export default function ScannerPage() {
 
         if (loopNow - runtime.lastMaintenanceTs >= SCANNER_MAINTENANCE_INTERVAL_MS) {
           const activeTrackNumbers = new Set(allTracks.map((track) => track.trackNumber));
+          const activeVehicleTrackNumbers = new Set(
+            runtime.vehicleTracker.getActiveTracks(true).map((track) => track.trackNumber)
+          );
           runtime.bestFrameSelector.clearExcept(activeTrackNumbers);
           runtime.bestFrameSelector.pruneStale(undefined, activeTrackNumbers, loopNow);
+          runtime.vehicleFrameBuffer.clearExcept(activeVehicleTrackNumbers);
+          runtime.vehicleFrameBuffer.pruneStale(activeVehicleTrackNumbers, loopNow);
           pruneCooldownMap(cooldownMap.current, scannerSettings.duplicateCooldown * 1000, loopNow);
           runtime.lastMaintenanceTs = loopNow;
         }
@@ -3515,6 +3685,8 @@ export default function ScannerPage() {
         if (detectionTimeout) clearTimeout(detectionTimeout);
         metrics.platesVisible = 0;
         metrics.activeTracks = 0;
+        metrics.vehicleTracks = 0;
+        metrics.vehicleFramesBuffered = 0;
         metrics.tracks = [];
       };
     });
@@ -3732,6 +3904,14 @@ export default function ScannerPage() {
         averageLatencyMs: snapshot.detectorLatencyAvgMs,
         fps: detFps,
         frames: snapshot.detectorLatencySamples,
+      },
+      vehicleFirstMetrics: {
+        activeVehicleTracks: snapshot.vehicleTracksActive,
+        bufferedVehicleFrames: snapshot.vehicleFramesBuffered,
+        motionDetections: snapshot.vehicleMotionDetectionCount,
+        plateSeedDetections: snapshot.vehicleSeedDetectionCount,
+        vehicleCropPlateSearches: snapshot.vehiclePlateSearchCount,
+        recoveredPlateDetections: snapshot.vehicleRecoveredPlateCount,
       },
       ocrMetrics: {
         medianLatencyMs: snapshot.ocrLatencyMedianMs,
@@ -4371,6 +4551,7 @@ export default function ScannerPage() {
                   </div>
                 )}
 
+                {/* Desktop: camera selector dropdown */}
                 <div className="absolute inset-x-2.5 top-2.5 z-20 hidden sm:flex items-center gap-1.5">
                   <select
                     value={slot.deviceId}
@@ -4414,6 +4595,24 @@ export default function ScannerPage() {
                     </button>
                   )}
                 </div>
+
+                {/* Mobile: front/back camera flip button */}
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleFlipCamera();
+                  }}
+                  className="sm:hidden absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900/85 px-2.5 py-1.5 text-[10px] font-bold text-slate-200 active:bg-slate-800"
+                  title={language === 'BM' ? 'Tukar kamera' : 'Flip camera'}
+                >
+                  <SwitchCamera className="h-4 w-4" />
+                  <span>
+                    {mobileFacingMode === 'environment'
+                      ? (language === 'BM' ? 'Depan' : 'Front')
+                      : (language === 'BM' ? 'Belakang' : 'Back')}
+                  </span>
+                </button>
 
                 {supportsMultiCameraScan && (
                   <button
@@ -4676,6 +4875,10 @@ export default function ScannerPage() {
             {[
               ['Camera FPS', camFps.toFixed(0)],
               ['Detector FPS', detFps.toFixed(0)],
+              ['Vehicle tracks', runtimeMetricsSnapshot.vehicleTracksActive.toFixed(0)],
+              ['Vehicle frames', runtimeMetricsSnapshot.vehicleFramesBuffered.toFixed(0)],
+              ['Vehicle searches', runtimeMetricsSnapshot.vehiclePlateSearchCount.toFixed(0)],
+              ['Recovered plates', runtimeMetricsSnapshot.vehicleRecoveredPlateCount.toFixed(0)],
               ['Execution', runtimeMetricsSnapshot.executionMode],
               ['Camera', runtimeMetricsSnapshot.cameraProfile],
               ['Detector target', `${getTierDetectorTargetMs(runtimeMetricsSnapshot.deviceTier)} ms`],

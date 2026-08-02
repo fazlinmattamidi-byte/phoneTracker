@@ -87,7 +87,8 @@ export function selectPreferredCamera(
 export function buildDesktopCameraConstraints(
   deviceId = '',
   cameraConfig?: AdaptiveScannerConfig['camera'],
-  fallback = false
+  fallback = false,
+  facingMode?: 'user' | 'environment'
 ): MediaTrackConstraints {
   const idealWidth = fallback
     ? cameraConfig?.fallbackWidth ?? DESKTOP_CAMERA_PROFILE.fallbackWidth
@@ -104,6 +105,9 @@ export function buildDesktopCameraConstraints(
 
   if (deviceId) {
     constraints.deviceId = { exact: deviceId };
+  } else if (facingMode) {
+    // On mobile, prefer facingMode over deviceId when no specific device is locked
+    constraints.facingMode = { ideal: facingMode };
   }
 
   return constraints;
@@ -111,17 +115,18 @@ export function buildDesktopCameraConstraints(
 
 export async function openDesktopCameraStream(
   deviceId = '',
-  cameraConfig?: AdaptiveScannerConfig['camera']
+  cameraConfig?: AdaptiveScannerConfig['camera'],
+  facingMode?: 'user' | 'environment'
 ): Promise<MediaStream> {
   try {
     return await navigator.mediaDevices.getUserMedia({
-      video: buildDesktopCameraConstraints(deviceId, cameraConfig, false),
+      video: buildDesktopCameraConstraints(deviceId, cameraConfig, false, facingMode),
       audio: false,
     });
   } catch (primaryError) {
     try {
       return await navigator.mediaDevices.getUserMedia({
-        video: buildDesktopCameraConstraints(deviceId, cameraConfig, true),
+        video: buildDesktopCameraConstraints(deviceId, cameraConfig, true, facingMode),
         audio: false,
       });
     } catch {
