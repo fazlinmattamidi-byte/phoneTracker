@@ -165,12 +165,15 @@ type ScannerReloadTrigger = {
   confirmationMs: number;
 };
 
+type ScannerNoticeMode = 'STARTING' | 'RELOADING';
+
 type ScannerReloadNotice = {
   isReloading: boolean;
   reason: string;
   startedAt: number;
   completedAt?: number;
   count: number;
+  mode: ScannerNoticeMode;
 };
 
 type CameraStopOptions = {
@@ -915,6 +918,20 @@ function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, ms)));
+}
+
+function getScannerCameraSettleMs(mode: ScannerNoticeMode): number {
+  if (isMobileScannerDevice()) {
+    return mode === 'RELOADING'
+      ? MOBILE_SCANNER_CAMERA_RELOAD_SETTLE_MS
+      : MOBILE_SCANNER_CAMERA_STARTUP_SETTLE_MS;
+  }
+
+  return mode === 'RELOADING' ? SCANNER_CAMERA_RELOAD_SETTLE_MS : SCANNER_CAMERA_STARTUP_SETTLE_MS;
+}
+
 function downloadJson(filename: string, payload: unknown): void {
   if (typeof document === 'undefined') return;
 
@@ -1075,6 +1092,10 @@ const MOBILE_SCANNER_STREAM_COOLDOWN_MS = 15000;
 const MOBILE_SCANNER_LOW_FPS_THRESHOLD = 7;
 const MOBILE_SCANNER_MEMORY_GROWTH_PERCENT = 18;
 const MOBILE_SCANNER_OCR_QUEUE_DEPTH = 6;
+const SCANNER_CAMERA_STARTUP_SETTLE_MS = 900;
+const SCANNER_CAMERA_RELOAD_SETTLE_MS = 1200;
+const MOBILE_SCANNER_CAMERA_STARTUP_SETTLE_MS = 1800;
+const MOBILE_SCANNER_CAMERA_RELOAD_SETTLE_MS = 2200;
 
 type MotionOcrMode = MotionBucket;
 type OcrQueuePressure = 'EMPTY' | 'MODERATE' | 'LARGE' | 'CRITICAL';
@@ -1664,6 +1685,8 @@ export default function ScannerPage() {
   const stopCameraRef = useRef<(options?: CameraStopOptions) => void>(() => undefined);
   const startVisibleCamerasRef = useRef<(options?: { resumeScanning?: boolean }) => Promise<boolean>>(async () => false);
   const scannerReloadInFlightRef = useRef(false);
+  const scannerStartupInFlightRef = useRef(false);
+  const scannerProcessingPausedRef = useRef(false);
   const lastScannerReloadAtRef = useRef(0);
   const scannerReloadIssueRef = useRef<{ code: ScannerReloadTriggerCode; firstSeenAt: number } | null>(null);
   const scannerReloadNoticeTimerRef = useRef<number | null>(null);
@@ -1679,6 +1702,7 @@ export default function ScannerPage() {
   const [cameraMetadataBySlot, setCameraMetadataBySlot] = useState<Record<string, CameraRuntimeMetadata>>({});
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [scannerProcessingPaused, setScannerProcessingPausedState] = useState(false);
   const [mobileCameraZoom, setMobileCameraZoom] = useState(1);
   const [mobileFacingMode, setMobileFacingMode] = useState<MobileFacingMode>('environment');
   const [scannerReloadNotice, setScannerReloadNotice] = useState<ScannerReloadNotice | null>(null);
@@ -1821,6 +1845,11 @@ export default function ScannerPage() {
     }
   }, []);
 
+  const setScannerProcessingPaused = useCallback((paused: boolean) => {
+    scannerProcessingPausedRef.current = paused;
+    setScannerProcessingPausedState(paused);
+  }, []);
+
   const requestScannerOnlyReload = useCallback(
     async (trigger: ScannerReloadTrigger) => {
       if (scannerReloadInFlightRef.current || !isScanningRef.current) return false;
@@ -1831,12 +1860,14 @@ export default function ScannerPage() {
 
       const startedAt = Date.now();
       lastScannerReloadAtRef.current = startedAt;
+      setScannerProcessingPaused(true);
       setCurrentPlate('RELOADING');
       setScannerReloadNotice((prev) => ({
         isReloading: true,
         reason: trigger.message,
         startedAt,
         count: (prev?.count ?? 0) + 1,
+        mode: 'RELOADING',
       }));
 
       try {
@@ -1845,22 +1876,29 @@ export default function ScannerPage() {
         resetLiveScanUiRef.current();
 
         const started = await startVisibleCamerasRef.current({ resumeScanning: true });
+        if (started) {
+          await waitMs(getScannerCameraSettleMs('RELOADING'));
+          resetLiveScanUiRef.current();
+        }
         const completedAt = Date.now();
 
         if (!started) {
+          setScannerProcessingPaused(false);
           setIsScanning(false);
           setCurrentPlate('READY');
         } else {
+          setScannerProcessingPaused(false);
           setCurrentPlate('SCANNING');
         }
 
         setScannerReloadNotice((prev) =>
           prev?.startedAt === startedAt
             ? {
-                ...prev,
-                isReloading: false,
-                completedAt,
-              }
+              ...prev,
+              isReloading: false,
+              completedAt,
+              reason: started ? `${trigger.message} complete` : trigger.message,
+            }
             : prev
         );
 
@@ -1871,10 +1909,13 @@ export default function ScannerPage() {
 
         return started;
       } finally {
+        if (scannerReloadInFlightRef.current) {
+          setScannerProcessingPaused(false);
+        }
         scannerReloadInFlightRef.current = false;
       }
     },
-    [clearScannerReloadNoticeTimer]
+    [clearScannerReloadNoticeTimer, setScannerProcessingPaused]
   );
 
   const maybeAutoReloadMobileScanner = useCallback(
@@ -2231,6 +2272,8 @@ export default function ScannerPage() {
     if (!preserveScanningState) {
       isScanningRef.current = false;
       scannerReloadInFlightRef.current = false;
+      scannerStartupInFlightRef.current = false;
+      setScannerProcessingPaused(false);
     }
 
     Object.values(activeStreamsRef.current).forEach((stream) => {
@@ -2258,8 +2301,10 @@ export default function ScannerPage() {
     setCameraMetadataBySlot({});
     setIsCameraReady(false);
     if (!preserveScanningState) {
-      clearScannerReloadNoticeTimer();
-      setScannerReloadNotice(null);
+      if (!scannerStartupInFlightRef.current) {
+        clearScannerReloadNoticeTimer();
+        setScannerReloadNotice(null);
+      }
       setIsScanning(false);
     }
     resetLiveScanUi();
@@ -2421,22 +2466,70 @@ export default function ScannerPage() {
   };
 
   const handleStartScanning = async () => {
-    const started = await startVisibleCameras();
-    if (started) {
+    if (scannerStartupInFlightRef.current || scannerReloadInFlightRef.current) return;
+
+    scannerStartupInFlightRef.current = true;
+    scannerReloadIssueRef.current = null;
+    clearScannerReloadNoticeTimer();
+    setScannerProcessingPaused(true);
+    const startedAt = Date.now();
+    setCurrentPlate('RELOADING');
+    setScannerReloadNotice((prev) => ({
+      isReloading: true,
+      reason: language === 'BM' ? 'Kamera sedang dimulakan' : 'Camera initializing',
+      startedAt,
+      count: (prev?.count ?? 0) + 1,
+      mode: 'STARTING',
+    }));
+
+    try {
+      const started = await startVisibleCameras();
+      if (!started) {
+        setScannerProcessingPaused(false);
+        setScannerReloadNotice(null);
+        setCurrentPlate('READY');
+        return;
+      }
+
       if (!isRuntimeScanningReady(runtimeStateRef.current)) {
         void startRuntimeInit();
       }
+
+      await waitMs(getScannerCameraSettleMs('STARTING'));
       resetLiveScanUi();
       lastScannerReloadAtRef.current = Date.now();
-      scannerReloadIssueRef.current = null;
       setCurrentPlate('SCANNING');
       isCameraReadyRef.current = true;
       isScanningRef.current = true;
       setIsScanning(true);
+      setScannerProcessingPaused(false);
+
+      const completedAt = Date.now();
+      setScannerReloadNotice((prev) =>
+        prev?.startedAt === startedAt
+          ? {
+              ...prev,
+              isReloading: false,
+              completedAt,
+              reason: language === 'BM' ? 'Kamera sedia' : 'Camera ready',
+            }
+          : prev
+      );
+      scannerReloadNoticeTimerRef.current = window.setTimeout(() => {
+        setScannerReloadNotice((prev) => (prev && !prev.isReloading ? null : prev));
+        scannerReloadNoticeTimerRef.current = null;
+      }, MOBILE_SCANNER_RELOAD_NOTICE_MS);
+    } finally {
+      scannerStartupInFlightRef.current = false;
+      if (!isScanningRef.current) {
+        setScannerProcessingPaused(false);
+      }
     }
   };
 
   const handleStopScanning = () => {
+    scannerStartupInFlightRef.current = false;
+    setScannerProcessingPaused(false);
     stopCamera();
     setCurrentPlate('READY');
   };
@@ -2874,7 +2967,7 @@ export default function ScannerPage() {
   );
 
   useEffect(() => {
-    if (!isCameraReady || !isScanning) return;
+    if (!isCameraReady || !isScanning || scannerProcessingPaused) return;
 
     let stopped = false;
     const slotsToScan = (supportsMultiCameraScan
@@ -3709,6 +3802,7 @@ export default function ScannerPage() {
     previewSlotIds,
     queueEnvironmentSample,
     runDatabaseMatch,
+    scannerProcessingPaused,
     supportsMultiCameraScan,
   ]);
 
@@ -4009,6 +4103,34 @@ export default function ScannerPage() {
   const runtimeReady = isRuntimeScanningReady(runtimeState);
   const scannerReloadActive = Boolean(scannerReloadNotice?.isReloading);
   const scannerReloadComplete = Boolean(scannerReloadNotice && !scannerReloadNotice.isReloading);
+  const scannerNoticeMode = scannerReloadNotice?.mode ?? 'RELOADING';
+  const scannerNoticeStarting = scannerReloadActive && scannerNoticeMode === 'STARTING';
+  const scannerNoticeTitle = scannerNoticeStarting
+    ? language === 'BM'
+      ? 'Kamera dimulakan'
+      : 'Camera initializing'
+    : scannerReloadActive
+    ? language === 'BM'
+      ? 'Pengimbas dimuat semula'
+      : 'Scanner reloading'
+    : scannerNoticeMode === 'STARTING'
+    ? language === 'BM'
+      ? 'Kamera sedia'
+      : 'Camera ready'
+    : language === 'BM'
+    ? 'Pengimbas disegar'
+    : 'Scanner refreshed';
+  const scannerNoticeBody = scannerReloadActive
+    ? scannerNoticeMode === 'STARTING'
+      ? language === 'BM'
+        ? 'Kamera dibuka semula dan distabilkan sebelum imbasan bermula.'
+        : 'Opening a fresh camera stream and letting it settle before scanning.'
+      : language === 'BM'
+      ? 'Kamera disambung semula kerana prestasi atau sambungan perlu disegar.'
+      : 'Refreshing the camera because performance or stream health needed a reset.'
+    : language === 'BM'
+    ? 'Imbasan disambung semula.'
+    : 'Scanning has resumed.';
   const visibleTrack = tracksList.find((track) => getTrackPlateText(track)) || tracksList[0] || null;
   const activeScanTileCount = supportsMultiCameraScan
     ? cameraSlots.filter((slot) => previewSlotIds.includes(slot.id)).length
@@ -4016,9 +4138,13 @@ export default function ScannerPage() {
       ? 1
       : 0;
   const scannerStatusText = scannerReloadActive
-    ? 'Scanner reloading - camera stream is being refreshed'
+    ? scannerNoticeMode === 'STARTING'
+      ? 'Camera initializing - scanning starts after stream settles'
+      : 'Scanner reloading - camera stream is being refreshed'
     : scannerReloadComplete
-    ? 'Scanner refreshed and scanning resumed'
+    ? scannerNoticeMode === 'STARTING'
+      ? 'Camera ready and scanning started'
+      : 'Scanner refreshed and scanning resumed'
     : cameraError
     ? 'Camera unavailable'
     : isScanning && runtimeReady && supportsMultiCameraScan
@@ -4054,13 +4180,9 @@ export default function ScannerPage() {
       ? 'Kamera perlu disemak'
       : 'Camera needs attention'
     : scannerReloadActive
-    ? language === 'BM'
-      ? 'Pengimbas dimuat semula'
-      : 'Scanner reloading'
+    ? scannerNoticeTitle
     : scannerReloadComplete
-    ? language === 'BM'
-      ? 'Pengimbas disegar'
-      : 'Scanner refreshed'
+    ? scannerNoticeTitle
     : isScanning && runtimeReady
     ? language === 'BM'
       ? 'Sedang mengimbas'
@@ -4079,9 +4201,7 @@ export default function ScannerPage() {
   const simpleScannerHint = cameraError
     ? cameraError
     : scannerReloadActive
-    ? language === 'BM'
-      ? 'Kamera pengimbas sedang disambung semula. Aplikasi tidak dimuat semula.'
-      : 'Refreshing the scanner camera only. The app stays open.'
+    ? scannerNoticeBody
     : scannerReloadComplete
     ? language === 'BM'
       ? `${scannerReloadNotice?.reason || 'Pengimbas disegar'}; imbasan disambung semula.`
@@ -4533,12 +4653,24 @@ export default function ScannerPage() {
                     <div className="rounded-xl border border-cyan-800 bg-slate-950/90 px-4 py-3 shadow-xl">
                       <RefreshCw className="mx-auto h-5 w-5 animate-spin text-cyan-300" />
                       <div className="mt-2 text-xs font-black uppercase tracking-wider text-white">
-                        {language === 'BM' ? 'Pengimbas dimuat semula' : 'Scanner reloading'}
+                        {scannerNoticeTitle}
                       </div>
                       <div className="mt-1 max-w-[220px] text-[10px] font-semibold text-slate-400">
-                        {language === 'BM'
-                          ? 'Kamera disambung semula. Aplikasi kekal terbuka.'
-                          : 'Camera reconnecting. The app stays open.'}
+                        {scannerNoticeBody}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {scannerReloadComplete && (
+                  <div className="absolute inset-x-3 top-14 z-30 flex justify-center sm:top-12">
+                    <div className="rounded-xl border border-emerald-800 bg-emerald-950/90 px-3 py-2 text-center shadow-xl backdrop-blur-md">
+                      <CheckCircle2 className="mx-auto h-4 w-4 text-emerald-300" />
+                      <div className="mt-1 text-[10px] font-black uppercase tracking-wider text-emerald-100">
+                        {scannerNoticeTitle}
+                      </div>
+                      <div className="mt-0.5 max-w-[220px] text-[9px] font-semibold text-emerald-200/80">
+                        {scannerNoticeBody}
                       </div>
                     </div>
                   </div>
