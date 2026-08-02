@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { normalizePlate, generateCandidatePlates, isPossibleMatch, formatDisplayPlate } from '../lib/anpr/normaliser';
+import {
+  normalizePlate,
+  generateCandidatePlates,
+  isPossibleMatch,
+  isRepeatedCharacterOmission,
+  formatDisplayPlate,
+} from '../lib/anpr/normaliser';
 import { validateMalaysianPattern } from '../lib/anpr/patterns';
 import { evaluateDatabaseMatch } from '../lib/anpr/matchingEngine';
 import { PlateQRepository } from '../lib/db/repository';
@@ -53,6 +59,8 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
   it('detects possible matches correctly (edit distance & confusion)', () => {
     expect(isPossibleMatch('WXY77B8', 'WXY7788')).toBe(true);
     expect(isPossibleMatch('JSD8888', 'ABC9999')).toBe(false);
+    expect(isRepeatedCharacterOmission('AN7569', 'ANN7569')).toBe(true);
+    expect(isRepeatedCharacterOmission('AB7569', 'ANN7569')).toBe(false);
   });
 
   it('evaluates database matching using ranking engine', () => {
@@ -62,6 +70,10 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     const exactRes = evaluateDatabaseMatch('JSD8888', 0.95, allVehicles);
     expect(exactRes.matchType).toBe('EXACT');
     expect(exactRes.matchedVehicle?.customerName).toBe('Siti');
+
+    const repeatedCharRes = evaluateDatabaseMatch('AN7569', 0.95, allVehicles);
+    expect(repeatedCharRes.matchType).toBe('EXACT');
+    expect(repeatedCharRes.normalizedPlate).toBe('ANN7569');
 
     // Possible Match
     const possRes = evaluateDatabaseMatch('WXY77B8', 0.85, allVehicles);

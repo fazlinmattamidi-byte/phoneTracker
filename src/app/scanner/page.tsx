@@ -1047,6 +1047,7 @@ const OCR_MAX_CONCURRENCY = 4;
 const OCR_RECENT_LOST_RESULT_GRACE_MS = 1800;
 const OCR_SINGLE_READ_COMMIT_MIN_CONFIDENCE = 0.45;
 const OCR_SINGLE_READ_COMMIT_MIN_SCORE = 0.68;
+const OCR_FINAL_LOCK_MIN_CONFIDENCE = 0.95;
 const OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE = 0.50;
 const OCR_QUICK_DB_MIN_SCORE = 0.58;
 const OCR_QUICK_DB_MIN_CONFIDENCE = 0.26;
@@ -2582,6 +2583,10 @@ export default function ScannerPage() {
           : evaluation.matchType === 'POSSIBLE' && possibleVehicles.length > 0
           ? 'POSSIBLE'
           : 'NONE';
+      const resolvedPlate =
+        resolvedMatchType === 'POSSIBLE' && possibleVehicles.length === 1
+          ? cleanPlateNumber(possibleVehicles[0].plate)
+          : cleanPlateNumber(evaluation.normalizedPlate || normalizedPlate);
 
       if (!commitNoCase && resolvedMatchType === 'NONE') {
         track.ocrState = 'CONSENSUS_BUILDING';
@@ -2589,7 +2594,33 @@ export default function ScannerPage() {
         return;
       }
 
-      cooldownMap.current.set(normalizedPlate, now);
+      if (confidence < OCR_FINAL_LOCK_MIN_CONFIDENCE) {
+        track.ocrState = 'CONSENSUS_BUILDING';
+        track.pipelineState = 'CONSENSUS';
+        track.matchType = undefined;
+        track.matchedVehicle = undefined;
+        track.possibleMatchVehicles = undefined;
+        track.scanEventId = undefined;
+        track.cooldownActive = false;
+        track.cooldownStartedAt = undefined;
+        track.stabilizedPlate = undefined;
+        track.stabilizedConfidence = undefined;
+        return;
+      }
+
+      if (commitNoCase && resolvedPlate !== normalizedPlate) {
+        const resolvedLastSearch = cooldownMap.current.get(resolvedPlate) ?? 0;
+        if (now - resolvedLastSearch < cooldownMs) {
+          track.ocrState = 'COOLDOWN';
+          track.pipelineState = 'COOLDOWN';
+          track.cooldownActive = true;
+          track.cooldownStartedAt = now;
+          runtimeMetricsRef.current.duplicateOcrSkippedCount++;
+          return;
+        }
+      }
+
+      cooldownMap.current.set(resolvedPlate, now);
 
       const timestamp = new Date();
       const scanCameraName = getCameraSlotLabelFromRefs(slotId);
@@ -2598,7 +2629,7 @@ export default function ScannerPage() {
       const detectionId = `det-${timestamp.getTime()}-${Math.floor(Math.random() * 1000)}`;
       const newDetection: SessionDetection = {
         id: detectionId,
-        plate: normalizedPlate,
+        plate: resolvedPlate,
         confidence: confidencePercent,
         matched: resolvedMatchType === 'EXACT',
         vehicleId: matchedVehicle?.id,
@@ -2611,7 +2642,7 @@ export default function ScannerPage() {
         possibleVehicleIds: possibleVehicles.map((vehicle) => vehicle.id),
       };
 
-      setCurrentPlate(normalizedPlate);
+      setCurrentPlate(resolvedPlate);
       setLastDetectedSlotId(slotId);
       setLiveDetections((prevStream) => {
         const nextStream = [newDetection, ...prevStream.slice(0, 7)];
@@ -2623,11 +2654,11 @@ export default function ScannerPage() {
         type: 'DETECTION',
         action:
           resolvedMatchType === 'EXACT'
-            ? `Tanda Tindakan (Pengimbas): ${normalizedPlate}`
+            ? `Tanda Tindakan (Pengimbas): ${resolvedPlate}`
             : resolvedMatchType === 'POSSIBLE'
-            ? `Possible Match (Pengimbas): ${normalizedPlate}`
-            : `Live Scan: ${normalizedPlate}`,
-        plate: normalizedPlate,
+            ? `Possible Match (Pengimbas): ${resolvedPlate}`
+            : `Live Scan: ${resolvedPlate}`,
+        plate: resolvedPlate,
         details:
           resolvedMatchType === 'EXACT' && matchedVehicle
             ? `AI Confidence: ${confidencePercent}% - Tanda Tindakan: ${matchedVehicle.brand} ${matchedVehicle.model} - Location: ${scanLocation.name} (${scanLocation.gps})`
@@ -2663,7 +2694,7 @@ export default function ScannerPage() {
         trackId: track.trackId,
         cameraId: slotId || 'laptop-camera',
         cameraName: scanCameraName,
-        plate: normalizedPlate,
+        plate: resolvedPlate,
         startedAt: new Date(startedAt).toISOString(),
         endedAt: new Date(completedAt).toISOString(),
         durationMs: processingTimeMs,
@@ -3449,15 +3480,27 @@ export default function ScannerPage() {
                   lengthScore * 0.2 +
                   (pattern.isValid ? 0.1 : 0) -
                   plausibilityPenalty;
+                const isFullerCloseCandidate =
+                  text.length > 0 &&
+                  score >= bestScore - 0.025 &&
+                  resultText.length > text.length &&
+                  pattern.score >= validateMalaysianPattern(text).score - 0.05;
 
-                if (resultText && isPlausible && score >= bestScore) {
+                if (resultText && isPlausible && (score > bestScore || isFullerCloseCandidate)) {
                   text = resultText;
                   conf = result.confidence;
-                  bestScore = score;
+                  bestScore = Math.max(bestScore, score);
                   bestPatternValid = pattern.isValid;
                 }
 
-                if (resultText && isPlausible && result.confidence >= 0.25 && pattern.score >= 0.55 && score >= 0.58) {
+                if (
+                  resultText &&
+                  isPlausible &&
+                  result.confidence >= 0.25 &&
+                  pattern.score >= 0.55 &&
+                  score >= 0.58 &&
+                  Math.max(result.confidence, score) >= OCR_FINAL_LOCK_MIN_CONFIDENCE
+                ) {
                   break;
                 }
               }

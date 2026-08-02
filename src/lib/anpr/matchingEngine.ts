@@ -1,5 +1,10 @@
 import { VehicleCase, MatchType, CharacterConfidence, PlateCategory } from '../db/types';
-import { normalizePlate, generateCandidatePlates, isPossibleMatch } from './normaliser';
+import {
+  normalizePlate,
+  generateCandidatePlates,
+  isPossibleMatch,
+  isRepeatedCharacterOmission,
+} from './normaliser';
 import { validateMalaysianPattern } from './patterns';
 
 export interface MatchEvaluationResult {
@@ -88,6 +93,27 @@ export function evaluateDatabaseMatch(
       normalizedPlate: norm,
       category: patternVal.category,
       reason: 'Case is closed',
+    };
+  }
+
+  // OCR/CTC decoders can collapse repeated characters, especially on plates
+  // like ANN7569. Promote this only when exactly one active DB case explains
+  // the omission; otherwise keep the normal POSSIBLE flow.
+  const repeatedOmissionMatches = allVehicles.filter(
+    v => v.status !== 'CLOSED' && isRepeatedCharacterOmission(norm, v.normalizedPlate)
+  );
+
+  if (repeatedOmissionMatches.length === 1 && ocrConfidence >= Math.max(minConfidenceThreshold, 0.72)) {
+    const correctedVehicle = repeatedOmissionMatches[0];
+    const correctedPattern = validateMalaysianPattern(correctedVehicle.normalizedPlate);
+    return {
+      matchType: 'EXACT',
+      matchedVehicle: correctedVehicle,
+      possibleMatches: [],
+      confidence: Math.min(1, ocrConfidence * 0.94),
+      normalizedPlate: correctedVehicle.normalizedPlate,
+      category: correctedVehicle.plateCategory || correctedPattern.category,
+      reason: 'Recovered repeated-character OCR omission',
     };
   }
 

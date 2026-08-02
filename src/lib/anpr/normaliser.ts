@@ -171,6 +171,30 @@ export function getLevenshteinDistance(a: string, b: string): number {
 }
 
 /**
+ * Returns true when OCR likely collapsed a repeated plate character.
+ *
+ * Example: AN7569 -> ANN7569 is safe because deleting one of the adjacent Ns
+ * from the database plate reproduces the OCR text exactly.
+ */
+export function isRepeatedCharacterOmission(ocrReading: string, candidatePlate: string): boolean {
+  const normOcr = normalizePlate(ocrReading);
+  const normCandidate = normalizePlate(candidatePlate);
+
+  if (!normOcr || normCandidate.length !== normOcr.length + 1) return false;
+
+  for (let i = 0; i < normCandidate.length; i++) {
+    const leftSame = i > 0 && normCandidate[i] === normCandidate[i - 1];
+    const rightSame = i < normCandidate.length - 1 && normCandidate[i] === normCandidate[i + 1];
+    if (!leftSame && !rightSame) continue;
+
+    const withoutChar = normCandidate.slice(0, i) + normCandidate.slice(i + 1);
+    if (withoutChar === normOcr) return true;
+  }
+
+  return false;
+}
+
+/**
  * Evaluates whether plate A and plate B form a "Possible Match".
  * Returns true if Levenshtein distance === 1 OR if they match via candidate confusion substitution.
  */
