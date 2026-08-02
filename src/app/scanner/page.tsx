@@ -1169,13 +1169,14 @@ function isPlausiblePlateCandidate(text: string, expectedMinChars: number, patte
   return true;
 }
 
-function canCommitFinalPlateOutcome(text: string): boolean {
+function canCommitFinalPlateOutcome(text: string, voteCount: number = 1): boolean {
   const pattern = validateMalaysianPattern(text);
   const { letters, digits } = countPlateChars(text);
 
   if (!pattern.isValid || pattern.score < 0.55) return false;
   if (letters === 0 || digits === 0) return false;
   if (text.length >= 5 && digits < 2) return false;
+  if (voteCount < 2 && !isCompleteSingleReadCandidate(text, pattern)) return false;
 
   return true;
 }
@@ -1183,22 +1184,75 @@ function canCommitFinalPlateOutcome(text: string): boolean {
 function canCommitNoMatchOutcome(text: string, confidence: number, score: number, voteCount: number): boolean {
   const pattern = validateMalaysianPattern(text);
   const { letters, digits } = countPlateChars(text);
-  const stableEnough = voteCount >= 2 || Math.max(confidence, score) >= OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE;
 
-  if (!stableEnough) return false;
-  if (voteCount < 2 && !canCommitSingleReadOutcome(text, confidence, score)) return false;
+  // A single fast OCR pass may be useful for alerting an exact DB match, but it
+  // must not finalize "no case"; partial reads like AN756 can look valid.
+  if (voteCount < 2) return false;
+  if (Math.max(confidence, score) < OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE) return false;
   if (text.length < 3 || letters === 0 || digits === 0) return false;
   if (text.length >= 5 && digits < 2) return false;
+  if (!isCompleteNoMatchCandidate(text, pattern)) return false;
 
   return pattern.isValid || pattern.score >= 0.45;
 }
 
-function isCompleteSingleReadCandidate(text: string, patternScore: number): boolean {
+function isCompleteNoMatchCandidate(
+  text: string,
+  pattern: ReturnType<typeof validateMalaysianPattern>
+): boolean {
   const { letters, digits } = countPlateChars(text);
+  const category = pattern.category;
+
+  if (!pattern.isValid || letters === 0 || digits < 2 || text.length < 5) return false;
+  if (category === 'UNKNOWN_VALID_CANDIDATE') return false;
+  if (category === 'STANDARD') return digits >= 4;
+  if (category === 'EV_SPECIAL') return digits >= 3;
+  if (category === 'LETTER_NUMBER_SUFFIX') return pattern.hasTrailingSuffix && digits >= 2;
+  if (category === 'LANGKAWI' || category === 'SABAH' || category === 'SARAWAK') {
+    return pattern.hasTrailingSuffix ? digits >= 2 : digits >= 4;
+  }
+
+  return isCompleteSingleReadCandidate(text, pattern);
+}
+
+function isCompleteSingleReadCandidate(
+  text: string,
+  pattern: ReturnType<typeof validateMalaysianPattern>
+): boolean {
+  const { letters, digits } = countPlateChars(text);
+  const category = pattern.category;
+  const patternId = pattern.pattern?.id ?? '';
 
   if (letters === 0 || digits < 2) return false;
   if (text.length < 5) return false;
-  if (text.length > 10 && patternScore < 0.80) return false;
+  if (text.length > 10 && pattern.score < 0.80) return false;
+
+  if (category === 'STANDARD') {
+    return digits >= 4;
+  }
+
+  if (category === 'LETTER_NUMBER_SUFFIX') {
+    return pattern.hasTrailingSuffix && digits >= 2;
+  }
+
+  if (category === 'LANGKAWI' || category === 'SABAH' || category === 'SARAWAK') {
+    if (pattern.hasTrailingSuffix) return digits >= 2;
+    return digits >= 4 || text.length >= 6;
+  }
+
+  if (category === 'EV_SPECIAL') {
+    return digits >= 3;
+  }
+
+  if (category === 'DIPLOMATIC') {
+    return text.length >= 5 && digits >= 2;
+  }
+
+  if (category === 'GOVERNMENT' || category === 'SPECIAL_SERIES') {
+    return digits >= 3 || pattern.score >= 0.82;
+  }
+
+  if (patternId === 'GENERIC_MALAYSIAN') return false;
 
   return true;
 }
@@ -1207,7 +1261,7 @@ function canCommitSingleReadOutcome(text: string, confidence: number, score: num
   const pattern = validateMalaysianPattern(text);
 
   if (!pattern.isValid || pattern.score < 0.70) return false;
-  if (!isCompleteSingleReadCandidate(text, pattern.score)) return false;
+  if (!isCompleteSingleReadCandidate(text, pattern)) return false;
 
   return confidence >= OCR_SINGLE_READ_COMMIT_MIN_CONFIDENCE && score >= OCR_SINGLE_READ_COMMIT_MIN_SCORE;
 }
@@ -3482,7 +3536,6 @@ export default function ScannerPage() {
                   const matchConfidence = Math.max(consensus.confidence, Math.min(0.98, bestScore));
                   updatedTrack.stabilizedPlate = consensus.normalizedPlate;
                   updatedTrack.stabilizedConfidence = matchConfidence;
-                  const finalOutcomeReady = canCommitFinalPlateOutcome(consensus.normalizedPlate);
                   const noMatchOutcomeReady = canCommitNoMatchOutcome(
                     consensus.normalizedPlate,
                     matchConfidence,
@@ -3490,14 +3543,14 @@ export default function ScannerPage() {
                     consensus.voteCount
                   );
                   await runDatabaseMatch(updatedTrack, consensus.normalizedPlate, matchConfidence, sourceSlotId, {
-                    commitNoCase: finalOutcomeReady || noMatchOutcomeReady,
+                    commitNoCase: noMatchOutcomeReady,
                   });
                 } else if (canCommitQuickDatabaseOutcome(text, conf, bestScore, acceptedVoteCount)) {
                   const quickMatchConfidence = Math.max(conf, Math.min(0.98, bestScore));
                   updatedTrack.stabilizedPlate = text;
                   updatedTrack.stabilizedConfidence = quickMatchConfidence;
                   await runDatabaseMatch(updatedTrack, text, quickMatchConfidence, sourceSlotId, {
-                    commitNoCase: true,
+                    commitNoCase: canCommitNoMatchOutcome(text, quickMatchConfidence, bestScore, acceptedVoteCount),
                   });
                 }
               } else if (updatedTrack.votes.size === 0) {
