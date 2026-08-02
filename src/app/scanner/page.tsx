@@ -1036,13 +1036,17 @@ const OCR_FIRST_READ_RETRY_MS = 80;
 const OCR_REPEAT_READ_RETRY_MS = 180;
 const OCR_MIN_TRACK_FRAMES = 2;
 const OCR_MIN_BUFFERED_CROPS = 1;
-const OCR_FIRST_READ_MIN_TRACK_CONFIDENCE = 0.62;
+const OCR_FIRST_READ_MIN_TRACK_CONFIDENCE = 0.56;
 const OCR_MIN_TRACK_CONFIDENCE = 0.70;
+const OCR_FAST_FIRST_READ_MIN_DETECTOR_CONFIDENCE = 0.58;
 const OCR_DEFAULT_MIN_READABLE_WIDTH = 48;
 const OCR_MAX_BEST_CROP_AGE_MS = 1800;
 const OCR_FIRST_READ_MIN_QUALITY = 0.24;
 const OCR_REPEAT_READ_MIN_QUALITY = 0.20;
 const OCR_MAX_CONCURRENCY = 4;
+const OCR_RECENT_LOST_RESULT_GRACE_MS = 1800;
+const OCR_SINGLE_READ_COMMIT_MIN_CONFIDENCE = 0.45;
+const OCR_SINGLE_READ_COMMIT_MIN_SCORE = 0.68;
 const OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE = 0.50;
 const OCR_QUICK_DB_MIN_SCORE = 0.58;
 const OCR_QUICK_DB_MIN_CONFIDENCE = 0.26;
@@ -1182,10 +1186,30 @@ function canCommitNoMatchOutcome(text: string, confidence: number, score: number
   const stableEnough = voteCount >= 2 || Math.max(confidence, score) >= OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE;
 
   if (!stableEnough) return false;
+  if (voteCount < 2 && !canCommitSingleReadOutcome(text, confidence, score)) return false;
   if (text.length < 3 || letters === 0 || digits === 0) return false;
   if (text.length >= 5 && digits < 2) return false;
 
   return pattern.isValid || pattern.score >= 0.45;
+}
+
+function isCompleteSingleReadCandidate(text: string, patternScore: number): boolean {
+  const { letters, digits } = countPlateChars(text);
+
+  if (letters === 0 || digits < 2) return false;
+  if (text.length < 5) return false;
+  if (text.length > 10 && patternScore < 0.80) return false;
+
+  return true;
+}
+
+function canCommitSingleReadOutcome(text: string, confidence: number, score: number): boolean {
+  const pattern = validateMalaysianPattern(text);
+
+  if (!pattern.isValid || pattern.score < 0.70) return false;
+  if (!isCompleteSingleReadCandidate(text, pattern.score)) return false;
+
+  return confidence >= OCR_SINGLE_READ_COMMIT_MIN_CONFIDENCE && score >= OCR_SINGLE_READ_COMMIT_MIN_SCORE;
 }
 
 function canCommitQuickDatabaseOutcome(text: string, confidence: number, score: number, voteCount: number): boolean {
@@ -1198,6 +1222,8 @@ function canCommitQuickDatabaseOutcome(text: string, confidence: number, score: 
 
   if (voteCount >= 2 && Math.max(confidence, score) >= 0.42) return true;
 
+  if (!canCommitSingleReadOutcome(text, confidence, score)) return false;
+
   return confidence >= OCR_QUICK_DB_MIN_CONFIDENCE && score >= OCR_QUICK_DB_MIN_SCORE;
 }
 
@@ -1207,6 +1233,13 @@ function getTrackVoteCount(track: ActiveTrack): number {
 
 function isTrackAvailableForReading(track: ActiveTrack): boolean {
   return track.trackState === 'VISIBLE' && track.visibleThisFrame !== false && (track.missedFrames ?? 0) === 0;
+}
+
+function isOcrResultStillUseful(track: ActiveTrack, now: number = Date.now()): boolean {
+  if (track.trackState === 'REMOVED' || track.cooldownActive) return false;
+  if (isTrackAvailableForReading(track)) return true;
+
+  return now - (track.lastSeenTimestamp || 0) <= OCR_RECENT_LOST_RESULT_GRACE_MS;
 }
 
 function isTrackDrawable(track: ActiveTrack): boolean {
@@ -1223,11 +1256,18 @@ function getMotionOcrMode(track: ActiveTrack): MotionOcrMode {
   return 'PAUSED';
 }
 
+function isFastFirstReadCandidate(track: ActiveTrack, voteCount: number = getTrackVoteCount(track)): boolean {
+  if (voteCount > 0 || track.cooldownActive || track.ocrRunning || track.ocrJobQueued) return false;
+
+  return (track.bbox.confidence ?? 0) >= OCR_FAST_FIRST_READ_MIN_DETECTOR_CONFIDENCE;
+}
+
 function canAttemptOcrForMotion(track: ActiveTrack, mode: MotionOcrMode): boolean {
+  if (isFastFirstReadCandidate(track)) return true;
   if (mode === 'NORMAL') return true;
-  if (mode === 'UNSTABLE') return track.framesSeen % 2 === 0;
+  if (mode === 'UNSTABLE') return getTrackVoteCount(track) === 0 || track.framesSeen % 2 === 0;
   if (mode === 'COLLECT_ONLY') {
-    return getTrackVoteCount(track) === 0 && track.framesSeen >= OCR_MIN_TRACK_FRAMES + 2 && track.framesSeen % 4 === 0;
+    return getTrackVoteCount(track) === 0 && track.framesSeen >= OCR_MIN_TRACK_FRAMES && track.framesSeen % 2 === 0;
   }
   return false;
 }
@@ -2924,9 +2964,10 @@ export default function ScannerPage() {
 
           if (track.ocrState === 'COOLDOWN' || track.ocrState === 'MATCHED') return;
           const motionMode = getMotionOcrMode(track);
+          const needsFastFirstRead = isFastFirstReadCandidate(track);
           runtimeMetricsRef.current.motionBuckets[motionMode]++;
 
-          if (motionMode === 'PAUSED') {
+          if (motionMode === 'PAUSED' && !needsFastFirstRead) {
             track.pipelineState = 'TRACKING';
             return;
           }
@@ -3087,6 +3128,7 @@ export default function ScannerPage() {
 
           const now = Date.now();
           const voteCount = getTrackVoteCount(track);
+          const fastFirstRead = isFastFirstReadCandidate(track, voteCount);
           const retryDelay =
             voteCount === 0
               ? Math.max(OCR_FIRST_READ_RETRY_MS, adaptiveConfig.ocr.firstReadRetryMs)
@@ -3100,10 +3142,13 @@ export default function ScannerPage() {
             continue;
           }
 
-          const minTrackConfidence =
+          const configuredMinTrackConfidence =
             voteCount === 0
               ? Math.max(OCR_FIRST_READ_MIN_TRACK_CONFIDENCE, adaptiveConfig.ocr.firstReadMinTrackConfidence)
               : Math.max(OCR_MIN_TRACK_CONFIDENCE, adaptiveConfig.ocr.minTrackConfidence);
+          const minTrackConfidence = fastFirstRead
+            ? Math.min(configuredMinTrackConfidence, OCR_FIRST_READ_MIN_TRACK_CONFIDENCE)
+            : configuredMinTrackConfidence;
           if ((track.trackConfidence ?? 0) < minTrackConfidence) {
             track.ocrState = 'COLLECTING';
             track.pipelineState = 'TRACKING';
@@ -3120,7 +3165,7 @@ export default function ScannerPage() {
               ? Math.max(OCR_MIN_BUFFERED_CROPS, adaptiveConfig.ocr.requiredBufferedCrops)
               : 1;
           const hasEnoughBufferedCrops = bufferedCropCount >= requiredCropCount;
-          const canReadFirstFrame = track.framesSeen >= OCR_MIN_TRACK_FRAMES || track.bbox.confidence >= 0.68;
+          const canReadFirstFrame = track.framesSeen >= OCR_MIN_TRACK_FRAMES || fastFirstRead;
 
           if (
             !canReadFirstFrame ||
@@ -3240,6 +3285,7 @@ export default function ScannerPage() {
 
           track.pipelineState = 'READY_FOR_OCR';
           attachQualityAssessmentToTrack(track, modelQuality, true);
+          const isFirstReadAttempt = voteCount === 0;
           track.ocrRunning = true;
           track.ocrJobQueued = true;
           track.lastOcrAttemptAt = now;
@@ -3268,6 +3314,7 @@ export default function ScannerPage() {
 
               const activeTrackLoad = Math.max(1, confirmedTracks.length);
               const fastOcrPass =
+                isFirstReadAttempt ||
                 runtimeMetricsRef.current.deviceTier !== 'A' ||
                 activeTrackLoad >= 2 ||
                 adaptiveConfig.ocr.maxCandidateCrops <= 3;
@@ -3380,7 +3427,7 @@ export default function ScannerPage() {
               });
 
               const updatedTrack = slotRuntime.tracker.getTrack(trackId);
-              if (!updatedTrack || updatedTrack.cooldownActive || !isTrackAvailableForReading(updatedTrack)) return;
+              if (!updatedTrack || !isOcrResultStillUseful(updatedTrack)) return;
 
               if (text && conf >= 0.25) {
                 addOcrVoteToTrack(updatedTrack, text, conf, modelQuality.score);
@@ -3392,6 +3439,7 @@ export default function ScannerPage() {
                 const acceptedVoteCount = getTrackVoteCount(updatedTrack);
                 const { digits } = countPlateChars(text);
                 const canFastMatch = bestPatternValid && digits >= (text.length >= 5 ? 2 : 1);
+                const canSingleReadCommit = canCommitSingleReadOutcome(text, conf, bestScore);
                 const adaptiveRecognitionThreshold = Math.max(
                   scannerSettings.recognitionThreshold,
                   adaptiveConfig.ocr.recognitionThreshold
@@ -3401,11 +3449,14 @@ export default function ScannerPage() {
                   adaptiveConfig.ocr.consensusVotes
                 );
                 const veryStrongRead =
-                  canFastMatch && conf >= Math.max(0.6, adaptiveRecognitionThreshold) && bestScore >= 0.7;
+                  canFastMatch &&
+                  (acceptedVoteCount >= 2 || canSingleReadCommit) &&
+                  conf >= Math.max(0.6, adaptiveRecognitionThreshold) &&
+                  bestScore >= 0.7;
                 const desktopFastSingleRead =
                   fastOcrPass &&
                   adaptiveConfigRef.current.ocr.consensusVotes <= 2 &&
-                  canFastMatch &&
+                  canSingleReadCommit &&
                   conf >= 0.32 &&
                   bestScore >= 0.62;
                 const strongRead = canFastMatch && conf >= 0.32 && bestScore >= 0.56;
@@ -3414,7 +3465,7 @@ export default function ScannerPage() {
                   : desktopFastSingleRead
                     ? 1
                   : strongRead
-                    ? Math.min(2, adaptiveConsensusVotes)
+                    ? Math.max(2, Math.min(2, adaptiveConsensusVotes))
                     : adaptiveConsensusVotes;
                 const confidenceGate = veryStrongRead
                   ? Math.min(adaptiveRecognitionThreshold, 0.58)
