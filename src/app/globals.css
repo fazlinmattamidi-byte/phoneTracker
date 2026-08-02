@@ -821,63 +821,6 @@ html.light .audit-role-pill {
   color: #64748b !important;
 }
 
-@media (min-width: 640px) {
-  html.light .audit-list-wrap {
-    background-color: #ffffff !important;
-    border-color: #d8e4ef !important;
-    box-shadow: 0 16px 38px rgba(15, 23, 42, 0.07), 0 1px 2px rgba(15, 23, 42, 0.04) !important;
-  }
-
-  html.light .audit-list-wrap table {
-    background-color: #ffffff !important;
-    color: #334155 !important;
-  }
-
-  html.light .audit-list-wrap thead {
-    background-color: #f8fafc !important;
-    color: #475569 !important;
-    border-color: #d8e4ef !important;
-  }
-
-  html.light .audit-list-wrap tbody {
-    background-color: #ffffff !important;
-    color: #334155 !important;
-  }
-
-  html.light .audit-list-wrap tbody tr {
-    background-color: #ffffff !important;
-  }
-
-  html.light .audit-list-wrap tbody tr:nth-child(even) {
-    background-color: #f8fbff !important;
-  }
-
-  html.light .audit-list-wrap tbody tr:hover {
-    background-color: #eef7ff !important;
-  }
-
-  html.light .audit-list-wrap tbody > tr > td {
-    color: #334155 !important;
-    border-color: #d8e4ef !important;
-  }
-
-  html.light .audit-list-wrap .text-slate-500,
-  html.light .audit-list-wrap .text-slate-600 {
-    color: #64748b !important;
-  }
-
-  html.light .audit-list-wrap .text-white {
-    color: #0f172a !important;
-  }
-
-  html.light .audit-list-wrap .bg-slate-950,
-  html.light .audit-list-wrap .bg-slate-950\/90 {
-    background-color: #ffffff !important;
-    border-color: #cbd5e1 !important;
-    box-shadow: none !important;
-  }
-}
-
 @media (max-width: 639px) {
   .scanner-camera-card {
     height: clamp(300px, calc(100dvh - 20.5rem), 620px) !important;
