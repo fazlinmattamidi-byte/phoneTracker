@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
+  SwitchCamera,
   Video,
   Volume2,
   VolumeX,
@@ -176,6 +177,8 @@ type CameraStopOptions = {
   preserveScanningState?: boolean;
   invalidatePendingStarts?: boolean;
 };
+
+type MobileFacingMode = 'user' | 'environment';
 
 type ScannerRuntimeMetrics = {
   sessionStartedAt: number;
@@ -1570,6 +1573,7 @@ export default function ScannerPage() {
   const scannerReloadIssueRef = useRef<{ code: ScannerReloadTriggerCode; firstSeenAt: number } | null>(null);
   const scannerReloadNoticeTimerRef = useRef<number | null>(null);
   const mobilePinchZoomRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
+  const mobileFacingModeRef = useRef<MobileFacingMode>('environment');
   const resetLiveScanUiRef = useRef<() => void>(() => undefined);
 
   const [availableCameras, setAvailableCameras] = useState<DesktopCameraDevice[]>([]);
@@ -1581,6 +1585,7 @@ export default function ScannerPage() {
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [mobileCameraZoom, setMobileCameraZoom] = useState(1);
+  const [mobileFacingMode, setMobileFacingMode] = useState<MobileFacingMode>('environment');
   const [scannerReloadNotice, setScannerReloadNotice] = useState<ScannerReloadNotice | null>(null);
   const [cameraError, setCameraError] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -2175,16 +2180,19 @@ export default function ScannerPage() {
     try {
       if (operationId !== cameraOperationIdRef.current) return false;
 
-      const streamKey = slot.deviceId || 'default-camera';
+      const facingMode = isMobileScannerDevice() ? mobileFacingModeRef.current : undefined;
+      const cameraDeviceId = facingMode ? '' : slot.deviceId;
+      const streamKey = cameraDeviceId || `default-camera-${facingMode ?? 'any'}`;
       let stream = activeStreamsRef.current[streamKey];
 
       if (!stream) {
         stream = await openDesktopCameraStream(
-          slot.deviceId,
+          cameraDeviceId,
           getActiveCameraCaptureConfig(
             adaptiveConfigRef.current.camera,
             runtimeMetricsRef.current.adaptationLevel
-          )
+          ),
+          facingMode
         );
         if (operationId !== cameraOperationIdRef.current) {
           stream.getTracks().forEach((track) => {
@@ -2197,7 +2205,9 @@ export default function ScannerPage() {
       }
 
       if (operationId !== cameraOperationIdRef.current) return false;
-      const cameraDevice = availableCamerasRef.current.find((device) => device.deviceId === slot.deviceId) || null;
+      const cameraDevice = cameraDeviceId
+        ? availableCamerasRef.current.find((device) => device.deviceId === cameraDeviceId) || null
+        : null;
       const cameraMetadata = getCameraRuntimeMetadata(stream, cameraDevice);
 
       const video = videoRefs.current[slot.id];
@@ -2222,7 +2232,7 @@ export default function ScannerPage() {
         };
       });
 
-      rememberSelectedCamera(slot.deviceId || cameraMetadata.deviceId);
+      if (!facingMode) rememberSelectedCamera(slot.deviceId || cameraMetadata.deviceId);
       setCameraMetadataBySlot((prev) => ({ ...prev, [slot.id]: cameraMetadata }));
       setPreviewSlotIds((ids) => (ids.includes(slot.id) ? ids : [...ids, slot.id]));
       setCameraError('');
@@ -2334,6 +2344,22 @@ export default function ScannerPage() {
   const handleStopScanning = () => {
     stopCamera();
     setCurrentPlate('READY');
+  };
+
+  const handleMobileFacingModeChange = (mode: MobileFacingMode) => {
+    if (mobileFacingModeRef.current === mode) return;
+
+    mobileFacingModeRef.current = mode;
+    setMobileFacingMode(mode);
+
+    if (!isMobileScannerDevice()) return;
+
+    const wasScanning = isScanningRef.current;
+    const hadCameraOpen = isCameraReadyRef.current || previewSlotIds.length > 0;
+    if (!hadCameraOpen && !wasScanning) return;
+
+    stopCamera({ preserveScanningState: wasScanning, invalidatePendingStarts: false });
+    void startVisibleCamerasRef.current({ resumeScanning: wasScanning });
   };
 
   const handleAddCamera = async () => {
@@ -4510,6 +4536,36 @@ export default function ScannerPage() {
               {language === 'BM' ? 'Pengimbas' : 'Scanner'}
             </div>
             <div className="truncate text-[11px] font-bold text-slate-200">{simpleScannerStatus}</div>
+          </div>
+          <div
+            className="flex shrink-0 items-center gap-1 rounded-xl border border-slate-700 bg-slate-950/80 p-1 backdrop-blur-md"
+            title={language === 'BM' ? 'Pilih kamera telefon' : 'Choose phone camera'}
+          >
+            <SwitchCamera className="h-3.5 w-3.5 text-cyan-300" />
+            {[
+              { id: 'environment' as const, label: language === 'BM' ? 'Belakang' : 'Back' },
+              { id: 'user' as const, label: language === 'BM' ? 'Depan' : 'Front' },
+            ].map((option) => {
+              const active = mobileFacingMode === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleMobileFacingModeChange(option.id);
+                  }}
+                  className={`h-8 rounded-lg px-2 text-[10px] font-black transition-all ${
+                    active
+                      ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20'
+                      : 'text-slate-300 hover:bg-slate-800/80'
+                  }`}
+                  aria-pressed={active}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
           </div>
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
