@@ -103,7 +103,7 @@ export function evaluateDatabaseMatch(
     v => v.status !== 'CLOSED' && isRepeatedCharacterOmission(norm, v.normalizedPlate)
   );
 
-  if (repeatedOmissionMatches.length === 1 && ocrConfidence >= Math.max(minConfidenceThreshold, 0.72)) {
+  if (repeatedOmissionMatches.length === 1 && ocrConfidence >= Math.max(minConfidenceThreshold, 0.58)) {
     const correctedVehicle = repeatedOmissionMatches[0];
     const correctedPattern = validateMalaysianPattern(correctedVehicle.normalizedPlate);
     return {

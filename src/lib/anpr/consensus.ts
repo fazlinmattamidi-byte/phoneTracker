@@ -129,6 +129,39 @@ export function addOcrVoteToTrack(
 }
 
 /**
+ * Rewrites a track vote when a database-verified plate explains an OCR
+ * collapse, such as ANN7569 being read as AN7569 during motion.
+ */
+export function promoteCorrectedOcrVote(
+  track: ActiveTrack,
+  fromPlate: string,
+  toPlate: string,
+  confidence: number,
+  qualityWeight: number = 1.0
+): void {
+  const fromNorm = normalizePlate(fromPlate);
+  const toNorm = normalizePlate(toPlate);
+  if (!toNorm || fromNorm === toNorm) return;
+
+  const boundedQuality = Math.min(1.0, Math.max(0.0, qualityWeight));
+  const qualityMultiplier = 0.75 + boundedQuality * 0.25;
+  const weightedConfidence = Math.max(0, confidence) * qualityMultiplier;
+  const sourceVote = fromNorm ? track.votes.get(fromNorm) : undefined;
+  const correctedVote = track.votes.get(toNorm) || { count: 0, totalConfidence: 0 };
+
+  correctedVote.count += Math.max(sourceVote?.count ?? 0, 1);
+  correctedVote.totalConfidence += Math.max(sourceVote?.totalConfidence ?? 0, weightedConfidence);
+  track.votes.set(toNorm, correctedVote);
+
+  if (fromNorm) {
+    track.votes.delete(fromNorm);
+  }
+
+  track.stabilizedPlate = toNorm;
+  track.stabilizedConfidence = Math.max(track.stabilizedConfidence ?? 0, confidence);
+}
+
+/**
  * Returns display string for track's current reading.
  */
 export function getTrackReadingDisplay(track: ActiveTrack): string {

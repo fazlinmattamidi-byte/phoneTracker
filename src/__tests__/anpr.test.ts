@@ -10,7 +10,7 @@ import { validateMalaysianPattern } from '../lib/anpr/patterns';
 import { evaluateDatabaseMatch } from '../lib/anpr/matchingEngine';
 import { PlateQRepository } from '../lib/db/repository';
 import { parseAndValidateVehiclesCsv } from '../lib/utils/csv';
-import { evaluateConsensus } from '../lib/anpr/consensus';
+import { evaluateConsensus, promoteCorrectedOcrVote } from '../lib/anpr/consensus';
 import { ActiveTrack } from '../lib/anpr/tracker';
 import { VALIDATION_MANIFEST } from '../lib/anpr/validationManifest';
 import {
@@ -57,6 +57,8 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     expect(validateMalaysianPattern('MALAYSIA200').category).toBe('SPECIAL_SERIES');
     expect(validateMalaysianPattern('VEP1234').category).toBe('INSTITUTIONAL');
     expect(validateMalaysianPattern('JSD8888').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('ABC123').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('VNA453').category).toBe('STANDARD');
     expect(validateMalaysianPattern('WWW1').category).toBe('STANDARD');
     expect(validateMalaysianPattern('B20').category).toBe('STANDARD');
     expect(validateMalaysianPattern('A1').category).toBe('STANDARD');
@@ -86,6 +88,10 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     const repeatedCharRes = evaluateDatabaseMatch('AN7569', 0.95, allVehicles);
     expect(repeatedCharRes.matchType).toBe('EXACT');
     expect(repeatedCharRes.normalizedPlate).toBe('ANN7569');
+
+    const movingRepeatedCharRes = evaluateDatabaseMatch('AN7569', 0.62, allVehicles, [], 0.58);
+    expect(movingRepeatedCharRes.matchType).toBe('EXACT');
+    expect(movingRepeatedCharRes.normalizedPlate).toBe('ANN7569');
 
     // Possible Match
     const possRes = evaluateDatabaseMatch('WXY77B8', 0.85, allVehicles);
@@ -124,6 +130,32 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     expect(consensus.isStabilized).toBe(true);
     expect(consensus.normalizedPlate).toBe('VAB1234');
     expect(consensus.displayPlate).toBe('VAB 1234');
+  });
+
+  it('promotes database-corrected repeated-character OCR votes back onto the track', () => {
+    const mockTrack: ActiveTrack = {
+      trackId: 'trk-motion-1',
+      trackNumber: 1,
+      bbox: { x: 10, y: 10, width: 100, height: 30, confidence: 0.9 },
+      cropSamples: [],
+      lastSeenFrame: 5,
+      firstSeenFrame: 1,
+      framesSeen: 5,
+      ocrState: 'CONSENSUS_BUILDING',
+      ocrRunning: false,
+      ocrJobQueued: false,
+      cooldownActive: false,
+      votes: new Map([
+        ['AN7569', { count: 2, totalConfidence: 1.3 }],
+      ]),
+    };
+
+    promoteCorrectedOcrVote(mockTrack, 'AN7569', 'ANN7569', 0.62, 0.8);
+
+    expect(mockTrack.votes.has('AN7569')).toBe(false);
+    expect(mockTrack.votes.get('ANN7569')?.count).toBe(2);
+    expect(mockTrack.stabilizedPlate).toBe('ANN7569');
+    expect(mockTrack.stabilizedConfidence).toBe(0.62);
   });
 
   it('parses CSV data and validates entries correctly', () => {

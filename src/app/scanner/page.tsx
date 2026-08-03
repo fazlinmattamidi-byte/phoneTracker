@@ -46,7 +46,8 @@ import {
 } from '@/lib/anpr/imageProcessor';
 import { BestFrameSelector } from '@/lib/anpr/bestFrameSelector';
 import { recognizePlateFromCanvas } from '@/lib/anpr/ocrEngine';
-import { addOcrVoteToTrack, evaluateConsensus } from '@/lib/anpr/consensus';
+import { addOcrVoteToTrack, evaluateConsensus, promoteCorrectedOcrVote } from '@/lib/anpr/consensus';
+import { isRepeatedCharacterOmission } from '@/lib/anpr/normaliser';
 import {
   initializeANPRRuntime,
   getANPRRuntimeState,
@@ -125,6 +126,18 @@ type SessionDetection = DetectionLog &
     possibleVehicleIds?: string[];
   };
 
+type SeenPlateItem = {
+  id: string;
+  plate: string;
+  tone: SeenPlateTone;
+  confidence: number;
+  cameraName: string;
+  timestamp: string;
+  detail: string;
+  searchHref: string;
+  active: boolean;
+};
+
 type AudioWindow = Window &
   typeof globalThis & {
     webkitAudioContext?: typeof AudioContext;
@@ -150,6 +163,8 @@ type DeviceTier = 'A' | 'B' | 'C' | 'D';
 type MotionBucket = 'NORMAL' | 'UNSTABLE' | 'COLLECT_ONLY' | 'PAUSED';
 
 type PerformanceMode = 'DESKTOP_STANDARD' | 'ADAPTIVE' | 'RECOVERY' | 'SURVIVAL';
+
+type SeenPlateTone = 'EXACT' | 'POSSIBLE' | 'NONE' | 'CHECKING' | 'READING';
 
 type ScannerReloadTriggerCode =
   | 'SCHEDULED_REFRESH'
@@ -820,6 +835,7 @@ function getTierOcrConcurrencyLimit(tier: DeviceTier): number {
     case 'A':
       return 3;
     case 'B':
+    case 'C':
       return 2;
     default:
       return 1;
@@ -1065,6 +1081,9 @@ const OCR_RECENT_LOST_RESULT_GRACE_MS = 1800;
 const OCR_SINGLE_READ_COMMIT_MIN_CONFIDENCE = 0.45;
 const OCR_SINGLE_READ_COMMIT_MIN_SCORE = 0.68;
 const OCR_FINAL_LOCK_MIN_CONFIDENCE = 0.95;
+const OCR_DB_EXACT_LOCK_MIN_CONFIDENCE = 0.58;
+const OCR_DB_POSSIBLE_LOCK_MIN_CONFIDENCE = 0.56;
+const OCR_REPEATED_OMISSION_LOCK_MIN_CONFIDENCE = 0.62;
 const OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE = 0.50;
 const OCR_QUICK_DB_MIN_SCORE = 0.58;
 const OCR_QUICK_DB_MIN_CONFIDENCE = 0.26;
@@ -1096,6 +1115,7 @@ const SCANNER_CAMERA_STARTUP_SETTLE_MS = 900;
 const SCANNER_CAMERA_RELOAD_SETTLE_MS = 1200;
 const MOBILE_SCANNER_CAMERA_STARTUP_SETTLE_MS = 1800;
 const MOBILE_SCANNER_CAMERA_RELOAD_SETTLE_MS = 2200;
+const SCANNER_UI_FLUSH_INTERVAL_MS = 500;
 
 type MotionOcrMode = MotionBucket;
 type OcrQueuePressure = 'EMPTY' | 'MODERATE' | 'LARGE' | 'CRITICAL';
@@ -1129,6 +1149,69 @@ function getTrackStatusLabel(track: ActiveTrack): string {
     default:
       return 'SCANNING';
   }
+}
+
+function getTrackSeenPlateTone(track: ActiveTrack): SeenPlateTone {
+  if (track.matchType === 'EXACT') return 'EXACT';
+  if (track.matchType === 'POSSIBLE') return 'POSSIBLE';
+  if (track.matchType === 'NONE') return 'NONE';
+  if (track.ocrState === 'DB_CHECKING') return 'CHECKING';
+  if (track.ocrState === 'OCR_RUNNING' || track.pipelineState === 'READING') return 'READING';
+  if (getTrackVoteCount(track) > 0 || track.stabilizedPlate) return 'CHECKING';
+  return 'READING';
+}
+
+function getDetectionSeenPlateTone(detection: SessionDetection): SeenPlateTone {
+  if (detection.matchType === 'EXACT' || detection.matched) return 'EXACT';
+  if (detection.matchType === 'POSSIBLE') return 'POSSIBLE';
+  return 'NONE';
+}
+
+function getSeenPlateStatusLabel(tone: SeenPlateTone, language: string): string {
+  const isBm = language === 'BM';
+  if (tone === 'EXACT') return isBm ? 'Padan' : 'Match';
+  if (tone === 'POSSIBLE') return isBm ? 'Semak' : 'Review';
+  if (tone === 'NONE') return isBm ? 'Tiada' : 'None';
+  if (tone === 'CHECKING') return isBm ? 'Semak DB' : 'DB Check';
+  return isBm ? 'Membaca' : 'Reading';
+}
+
+function getSeenPlateBorderClass(tone: SeenPlateTone): string {
+  if (tone === 'EXACT') return 'border-red-700 bg-red-950/45';
+  if (tone === 'POSSIBLE') return 'border-amber-700 bg-amber-950/35';
+  if (tone === 'NONE') return 'border-slate-800 bg-slate-900/90';
+  if (tone === 'CHECKING') return 'border-cyan-800 bg-cyan-950/25';
+  return 'border-slate-800 bg-slate-950/80';
+}
+
+function getSeenPlateBadgeClass(tone: SeenPlateTone): string {
+  if (tone === 'EXACT') return 'bg-red-600 text-white';
+  if (tone === 'POSSIBLE') return 'bg-amber-500 text-slate-950';
+  if (tone === 'NONE') return 'border border-slate-700 bg-slate-950 text-slate-300';
+  if (tone === 'CHECKING') return 'border border-cyan-700 bg-cyan-950 text-cyan-200';
+  return 'border border-slate-700 bg-slate-950 text-slate-300';
+}
+
+function getTrackDisplayConfidencePercent(track: ActiveTrack): number {
+  if (track.stabilizedConfidence !== undefined) {
+    return Math.round(clampNumber(track.stabilizedConfidence, 0, 1) * 100);
+  }
+
+  let topAverageConfidence = 0;
+  track.votes?.forEach((vote) => {
+    if (vote.count > 0) {
+      topAverageConfidence = Math.max(topAverageConfidence, vote.totalConfidence / vote.count);
+    }
+  });
+
+  const confidence = Math.max(
+    topAverageConfidence,
+    track.qualityScore ?? 0,
+    track.trackConfidence ?? 0,
+    track.bbox.confidence ?? 0
+  );
+
+  return Math.round(clampNumber(confidence, 0, 1) * 100);
 }
 
 function getTrackPlateText(track: ActiveTrack): string {
@@ -1202,7 +1285,7 @@ function canCommitFinalPlateOutcome(text: string, voteCount: number = 1): boolea
   if (!pattern.isValid || pattern.score < 0.55) return false;
   if (letters === 0 || digits === 0) return false;
   if (text.length >= 5 && digits < 2) return false;
-  if (voteCount < 2 && !isCompleteSingleReadCandidate(text, pattern)) return false;
+  if (voteCount < 2 && !isCompleteSingleReadCandidate(text, pattern, voteCount)) return false;
 
   return true;
 }
@@ -1217,14 +1300,18 @@ function canCommitNoMatchOutcome(text: string, confidence: number, score: number
   if (Math.max(confidence, score) < OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE) return false;
   if (text.length < 2 || letters === 0 || digits === 0) return false;
   if (text.length >= 5 && digits < 2) return false;
-  if (!isCompleteNoMatchCandidate(text, pattern)) return false;
+  if (!canCommitFinalPlateOutcome(text, voteCount)) return false;
+  if (!isCompleteNoMatchCandidate(text, pattern, confidence, score, voteCount)) return false;
 
   return pattern.isValid || pattern.score >= 0.45;
 }
 
 function isCompleteNoMatchCandidate(
   text: string,
-  pattern: ReturnType<typeof validateMalaysianPattern>
+  pattern: ReturnType<typeof validateMalaysianPattern>,
+  confidence: number,
+  score: number,
+  voteCount: number
 ): boolean {
   const { letters, digits } = countPlateChars(text);
   const category = pattern.category;
@@ -1232,19 +1319,23 @@ function isCompleteNoMatchCandidate(
   if (!pattern.isValid || letters === 0 || digits === 0 || text.length < 2) return false;
   if (category === 'UNKNOWN_VALID_CANDIDATE') return false;
   if (text.length <= 3) return pattern.score >= 0.70;
-  if (category === 'STANDARD') return digits >= 4;
+  if (category === 'STANDARD') {
+    if (digits >= 3) return true;
+    return voteCount >= 3 || Math.max(confidence, score) >= 0.72;
+  }
   if (category === 'EV_SPECIAL') return digits >= 3;
   if (category === 'LETTER_NUMBER_SUFFIX') return pattern.hasTrailingSuffix && digits >= 2;
   if (category === 'LANGKAWI' || category === 'SABAH' || category === 'SARAWAK') {
     return pattern.hasTrailingSuffix ? digits >= 2 : digits >= 4;
   }
 
-  return isCompleteSingleReadCandidate(text, pattern);
+  return isCompleteSingleReadCandidate(text, pattern, voteCount);
 }
 
 function isCompleteSingleReadCandidate(
   text: string,
-  pattern: ReturnType<typeof validateMalaysianPattern>
+  pattern: ReturnType<typeof validateMalaysianPattern>,
+  voteCount: number = 1
 ): boolean {
   const { letters, digits } = countPlateChars(text);
   const category = pattern.category;
@@ -1256,7 +1347,7 @@ function isCompleteSingleReadCandidate(
   if (text.length <= 3) return pattern.isValid && pattern.score >= 0.70;
 
   if (category === 'STANDARD') {
-    return digits >= 4 || text.length <= 4;
+    return digits >= 3 || text.length <= 4 || voteCount >= 3;
   }
 
   if (category === 'LETTER_NUMBER_SUFFIX') {
@@ -1289,7 +1380,7 @@ function canCommitSingleReadOutcome(text: string, confidence: number, score: num
   const pattern = validateMalaysianPattern(text);
 
   if (!pattern.isValid || pattern.score < 0.70) return false;
-  if (!isCompleteSingleReadCandidate(text, pattern)) return false;
+  if (!isCompleteSingleReadCandidate(text, pattern, 1)) return false;
 
   return confidence >= OCR_SINGLE_READ_COMMIT_MIN_CONFIDENCE && score >= OCR_SINGLE_READ_COMMIT_MIN_SCORE;
 }
@@ -1307,6 +1398,26 @@ function canCommitQuickDatabaseOutcome(text: string, confidence: number, score: 
   if (!canCommitSingleReadOutcome(text, confidence, score)) return false;
 
   return confidence >= OCR_QUICK_DB_MIN_CONFIDENCE && score >= OCR_QUICK_DB_MIN_SCORE;
+}
+
+function getDatabaseFinalLockMinConfidence(
+  resolvedMatchType: 'EXACT' | 'POSSIBLE' | 'NONE',
+  recoveredRepeatedOmission: boolean,
+  commitNoCase: boolean,
+  recognitionThreshold: number
+): number {
+  if (recoveredRepeatedOmission) return OCR_REPEATED_OMISSION_LOCK_MIN_CONFIDENCE;
+  if (resolvedMatchType === 'EXACT') {
+    return Math.max(OCR_DB_EXACT_LOCK_MIN_CONFIDENCE, Math.min(recognitionThreshold, 0.65));
+  }
+  if (resolvedMatchType === 'POSSIBLE') {
+    return Math.max(OCR_DB_POSSIBLE_LOCK_MIN_CONFIDENCE, Math.min(recognitionThreshold, 0.62));
+  }
+  if (resolvedMatchType === 'NONE' && commitNoCase) {
+    return OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE;
+  }
+
+  return OCR_FINAL_LOCK_MIN_CONFIDENCE;
 }
 
 function getTrackVoteCount(track: ActiveTrack): number {
@@ -2726,6 +2837,16 @@ export default function ScannerPage() {
         resolvedMatchType === 'POSSIBLE' && possibleVehicles.length === 1
           ? cleanPlateNumber(possibleVehicles[0].plate)
           : cleanPlateNumber(evaluation.normalizedPlate || normalizedPlate);
+      const recoveredRepeatedOmission =
+        resolvedMatchType === 'EXACT' &&
+        Boolean(matchedVehicle) &&
+        resolvedPlate !== normalizedPlate &&
+        isRepeatedCharacterOmission(normalizedPlate, resolvedPlate);
+      const resolvedConfidence = Math.max(confidence, evaluation.confidence);
+
+      if (recoveredRepeatedOmission) {
+        promoteCorrectedOcrVote(track, normalizedPlate, resolvedPlate, resolvedConfidence);
+      }
 
       if (!commitNoCase && resolvedMatchType === 'NONE') {
         track.ocrState = 'CONSENSUS_BUILDING';
@@ -2733,7 +2854,14 @@ export default function ScannerPage() {
         return;
       }
 
-      if (confidence < OCR_FINAL_LOCK_MIN_CONFIDENCE) {
+      const finalLockMinConfidence = getDatabaseFinalLockMinConfidence(
+        resolvedMatchType,
+        recoveredRepeatedOmission,
+        commitNoCase,
+        settingsRef.current.recognitionThreshold
+      );
+
+      if (resolvedConfidence < finalLockMinConfidence) {
         track.ocrState = 'CONSENSUS_BUILDING';
         track.pipelineState = 'CONSENSUS';
         track.matchType = undefined;
@@ -2742,24 +2870,27 @@ export default function ScannerPage() {
         track.scanEventId = undefined;
         track.cooldownActive = false;
         track.cooldownStartedAt = undefined;
-        track.stabilizedPlate = undefined;
-        track.stabilizedConfidence = undefined;
+        if (!recoveredRepeatedOmission) {
+          track.stabilizedPlate = undefined;
+          track.stabilizedConfidence = undefined;
+        }
         return;
       }
 
-      if (commitNoCase && resolvedPlate !== normalizedPlate) {
-        const resolvedLastSearch = cooldownMap.current.get(resolvedPlate) ?? 0;
-        if (now - resolvedLastSearch < cooldownMs) {
-          track.ocrState = 'COOLDOWN';
-          track.pipelineState = 'COOLDOWN';
-          track.cooldownActive = true;
-          track.cooldownStartedAt = now;
-          runtimeMetricsRef.current.duplicateOcrSkippedCount++;
-          return;
-        }
+      const shouldSuppressResolvedDuplicate = resolvedMatchType !== 'NONE' || commitNoCase;
+      const resolvedLastSearch = cooldownMap.current.get(resolvedPlate) ?? 0;
+      if (shouldSuppressResolvedDuplicate && now - resolvedLastSearch < cooldownMs) {
+        track.ocrState = 'COOLDOWN';
+        track.pipelineState = 'COOLDOWN';
+        track.cooldownActive = true;
+        track.cooldownStartedAt = now;
+        runtimeMetricsRef.current.duplicateOcrSkippedCount++;
+        return;
       }
 
       cooldownMap.current.set(resolvedPlate, now);
+      track.stabilizedPlate = resolvedPlate;
+      track.stabilizedConfidence = resolvedConfidence;
 
       const timestamp = new Date();
       const scanCameraName = getCameraSlotLabelFromRefs(slotId);
@@ -3023,7 +3154,7 @@ export default function ScannerPage() {
 
     if (slotsToScan.length === 0) return;
 
-    const flushInterval = window.setInterval(flushScannerMetrics, 1000);
+    const flushInterval = window.setInterval(flushScannerMetrics, SCANNER_UI_FLUSH_INTERVAL_MS);
     const cleanupRunners = slotsToScan.map((slot) => {
       const slotId = slot.id;
       const runtime = getSlotRuntime(slotId);
@@ -3825,7 +3956,7 @@ export default function ScannerPage() {
         }
 
         const now = Date.now();
-        if (now - lastMetricsFlushTs.current >= 1000) {
+        if (now - lastMetricsFlushTs.current >= SCANNER_UI_FLUSH_INTERVAL_MS) {
           lastMetricsFlushTs.current = now;
           flushScannerMetrics();
         }
@@ -4298,6 +4429,88 @@ export default function ScannerPage() {
     : language === 'BM'
     ? 'Keputusan akan dipaparkan selepas plat dikesan.'
     : 'Results will appear after a plate is detected.';
+  const recentDetectionByPlate = new Map<string, SessionDetection>();
+  liveDetections.forEach((detection) => {
+    const normalized = cleanPlateNumber(detection.plate);
+    if (normalized && !recentDetectionByPlate.has(normalized)) {
+      recentDetectionByPlate.set(normalized, detection);
+    }
+  });
+  const activeSeenPlateItems: SeenPlateItem[] = tracksList
+    .map((track) => {
+      const plate = cleanPlateNumber(getTrackPlateText(track));
+      if (!plate) return null;
+
+      const recentDetection = recentDetectionByPlate.get(plate);
+      const tone = recentDetection ? getDetectionSeenPlateTone(recentDetection) : getTrackSeenPlateTone(track);
+      const matchedVehicle =
+        recentDetection?.vehicleId
+          ? vehicles.find((vehicle) => vehicle.id === recentDetection.vehicleId) || null
+          : track.matchedVehicle
+            ? (track.matchedVehicle as Vehicle)
+            : null;
+      const detail =
+        tone === 'EXACT' && matchedVehicle
+          ? `${matchedVehicle.brand} ${matchedVehicle.model}`
+          : tone === 'POSSIBLE'
+            ? language === 'BM'
+              ? 'Perlu semakan'
+              : 'Needs review'
+            : tone === 'NONE'
+              ? language === 'BM'
+                ? 'Tiada padanan'
+                : 'No match'
+              : getTrackStatusLabel(track);
+
+      return {
+        id: `track-${track.trackId}`,
+        plate,
+        tone,
+        confidence: recentDetection?.confidence ?? getTrackDisplayConfidencePercent(track),
+        cameraName: recentDetection?.cameraName ?? activeCameraLabel,
+        timestamp: recentDetection?.timestamp ?? new Date(track.lastSeenTimestamp || Date.now()).toLocaleTimeString('en-GB'),
+        detail,
+        searchHref: `/search?plate=${encodeURIComponent(plate)}`,
+        active: true,
+      };
+    })
+    .filter((item): item is SeenPlateItem => Boolean(item));
+  const activeSeenPlateKeys = new Set(activeSeenPlateItems.map((item) => item.plate));
+  const recentSeenPlateItems: SeenPlateItem[] = liveDetections
+    .filter((detection) => !activeSeenPlateKeys.has(cleanPlateNumber(detection.plate)))
+    .map((detection) => {
+      const tone = getDetectionSeenPlateTone(detection);
+      const matchedVehicle = detection.vehicleId
+        ? vehicles.find((vehicle) => vehicle.id === detection.vehicleId) || null
+        : null;
+      return {
+        id: `det-${detection.id}`,
+        plate: cleanPlateNumber(detection.plate),
+        tone,
+        confidence: detection.confidence,
+        cameraName: detection.cameraName,
+        timestamp: detection.timestamp,
+        detail:
+          tone === 'EXACT' && matchedVehicle
+            ? `${matchedVehicle.brand} ${matchedVehicle.model}`
+            : tone === 'POSSIBLE'
+              ? language === 'BM'
+                ? 'Perlu semakan'
+                : 'Needs review'
+              : language === 'BM'
+                ? 'Tiada padanan'
+                : 'No match',
+        searchHref: `/search?plate=${encodeURIComponent(detection.plate)}`,
+        active: false,
+      };
+    });
+  const seenPlateItems = [...activeSeenPlateItems, ...recentSeenPlateItems].slice(0, 8);
+  const seenPlateSummaryTone =
+    seenPlateItems.find((item) => item.tone === 'EXACT')?.tone ||
+    seenPlateItems.find((item) => item.tone === 'POSSIBLE')?.tone ||
+    seenPlateItems.find((item) => item.tone === 'CHECKING')?.tone ||
+    seenPlateItems[0]?.tone ||
+    null;
   const scannerCameraStyle = {
     '--scanner-camera-zoom': mobileCameraZoom.toFixed(2),
   } as React.CSSProperties;
@@ -4646,6 +4859,7 @@ export default function ScannerPage() {
         ref={scannerCameraCardRef}
         className="scanner-camera-card relative h-[42dvh] min-h-[240px] max-h-[330px] overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-xl sm:aspect-video sm:h-auto sm:min-h-0 sm:max-h-none"
         style={scannerCameraStyle}
+        aria-busy={scannerControlBusy}
       >
         <div
           className={`grid h-full gap-2 p-2 sm:absolute sm:inset-0 ${
@@ -4948,57 +5162,66 @@ export default function ScannerPage() {
 
       <div
         className={`scanner-mobile-result sm:hidden rounded-2xl border p-3 shadow-xl ${
-          latestResultTone === 'EXACT'
+          seenPlateSummaryTone === 'EXACT'
             ? 'border-red-700 bg-red-950/45'
-            : latestResultTone === 'POSSIBLE'
+            : seenPlateSummaryTone === 'POSSIBLE'
             ? 'border-amber-700 bg-amber-950/35'
+            : seenPlateSummaryTone === 'CHECKING'
+            ? 'border-cyan-800 bg-cyan-950/25'
             : 'border-slate-800 bg-slate-900/90'
         }`}
       >
-        {latestDetection && latestResultTone ? (
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="truncate font-mono text-xl font-black leading-none text-cyan-300">
-                  {latestDetection.plate}
-                </span>
-                <span
-                  className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-black uppercase ${
-                    latestResultTone === 'EXACT'
-                      ? 'bg-red-600 text-white'
-                      : latestResultTone === 'POSSIBLE'
-                      ? 'bg-amber-500 text-slate-950'
-                      : 'border border-slate-700 bg-slate-950 text-slate-300'
-                  }`}
-                >
-                  {latestResultTone === 'EXACT'
-                    ? language === 'BM'
-                      ? 'Padan'
-                      : 'Match'
-                    : latestResultTone === 'POSSIBLE'
-                    ? language === 'BM'
-                      ? 'Semak'
-                      : 'Review'
-                    : language === 'BM'
-                    ? 'Tiada'
-                    : 'None'}
-                </span>
+        {seenPlateItems.length > 0 ? (
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
+                  {language === 'BM' ? 'Plat Dilihat' : 'Seen Plates'}
+                </div>
+                <div className="truncate text-[11px] font-semibold text-slate-400">
+                  {activeSeenPlateItems.length} {language === 'BM' ? 'aktif' : 'active'} · {liveDetections.length}{' '}
+                  {language === 'BM' ? 'keputusan sesi' : 'session results'}
+                </div>
               </div>
-              <div className="mt-1 truncate text-xs font-semibold text-slate-300">
-                {latestResultTone === 'EXACT' && latestExactVehicle
-                  ? `${latestExactVehicle.brand} ${latestExactVehicle.model}`
-                  : simpleLastResult}
-              </div>
-              <div className="mt-0.5 truncate text-[11px] font-mono text-slate-500">
-                {latestDetection.confidence}% · {latestDetection.timestamp}
-              </div>
+              <span className="shrink-0 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black text-slate-300">
+                {tracksList.length}
+              </span>
             </div>
-            <Link
-              href={latestSearchHref}
-              className="shrink-0 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-[10px] font-black uppercase text-slate-300"
-            >
-              {language === 'BM' ? 'Semak' : 'View'}
-            </Link>
+
+            <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+              {seenPlateItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={`rounded-xl border px-3 py-2 ${getSeenPlateBorderClass(item.tone)}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-mono text-lg font-black leading-none text-cyan-300">
+                          {item.plate}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded-md px-2 py-1 text-[9px] font-black uppercase ${getSeenPlateBadgeClass(item.tone)}`}
+                        >
+                          {getSeenPlateStatusLabel(item.tone, language)}
+                        </span>
+                      </div>
+                      <div className="mt-1 truncate text-xs font-semibold text-slate-300">{item.detail}</div>
+                      <div className="mt-0.5 truncate text-[10px] font-mono text-slate-500">
+                        {item.confidence}% · {item.timestamp}
+                        {item.active ? ` · ${language === 'BM' ? 'aktif' : 'active'}` : ''}
+                      </div>
+                    </div>
+                    <Link
+                      href={item.searchHref}
+                      className="shrink-0 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-[10px] font-black uppercase text-slate-300"
+                    >
+                      {language === 'BM' ? 'Semak' : 'View'}
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
           <div className="flex items-center gap-3">
@@ -5159,6 +5382,29 @@ export default function ScannerPage() {
             {liveDetections.length} session scans
           </span>
         </div>
+
+        {seenPlateItems.length > 0 && (
+          <div className="hidden sm:grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {seenPlateItems.slice(0, 8).map((item) => (
+              <Link
+                key={item.id}
+                href={item.searchHref}
+                className={`rounded-lg border px-3 py-2 transition-all hover:border-cyan-700 ${getSeenPlateBorderClass(item.tone)}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-sm font-black text-cyan-300">{item.plate}</span>
+                  <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-black uppercase ${getSeenPlateBadgeClass(item.tone)}`}>
+                    {getSeenPlateStatusLabel(item.tone, language)}
+                  </span>
+                </div>
+                <div className="mt-1 truncate text-[10px] font-semibold text-slate-300">{item.detail}</div>
+                <div className="mt-0.5 truncate font-mono text-[10px] text-slate-500">
+                  {item.confidence}% · {item.timestamp}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
 
         <div className="sm:hidden space-y-3">
           {liveDetections.length > 0 ? (
