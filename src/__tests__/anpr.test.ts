@@ -5,6 +5,7 @@ import {
   isPossibleMatch,
   isRepeatedCharacterOmission,
   formatDisplayPlate,
+  correctMalaysianTypographyOcr,
 } from '../lib/anpr/normaliser';
 import { validateMalaysianPattern } from '../lib/anpr/patterns';
 import { evaluateDatabaseMatch } from '../lib/anpr/matchingEngine';
@@ -88,17 +89,25 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     const candidates = generateCandidatePlates('WXY77B8');
     expect(candidates).toContain('WXY7788');
     expect(generateCandidatePlates('G0LD88')).toContain('GOLD88');
+    expect(generateCandidatePlates('SRM3028')).toContain('SAM3028');
   });
 
   it('corrects special series OCR using Malaysian context', () => {
     expect(correctMalaysianPlateOcr('MALAYS1A200').normalized).toBe('MALAYSIA200');
     expect(correctMalaysianPlateOcr('MALAYSA200', { ocrConfidence: 0.96 }).normalized).toBe('MALAYSIA200');
+    expect(correctMalaysianPlateOcr('MALRYSIA2020', { ocrConfidence: 0.93 }).normalized).toBe('MALAYSIA2020');
     expect(correctMalaysianPlateOcr('MADA N1888').normalized).toBe('MADANI888');
     expect(correctMalaysianPlateOcr('PUTRAJAYA I').normalized).toBe('PUTRAJAYA1');
     expect(correctMalaysianPlateOcr('PUTRAJYA88', { ocrConfidence: 0.94 }).normalized).toBe('PUTRAJAYA88');
     expect(correctMalaysianPlateOcr('WWWI').normalized).toBe('WWW1');
     expect(correctMalaysianPlateOcr('G0LD88').normalized).toBe('GOLD88');
     expect(correctMalaysianPlateOcr('JSD8888', { ocrConfidence: 0.99 }).normalized).toBe('JSD8888');
+  });
+
+  it('corrects conservative Malaysian typography confusions without broad R/A rewrites', () => {
+    expect(correctMalaysianTypographyOcr('SRM3028', { ocrConfidence: 0.97 }).normalized).toBe('SAM3028');
+    expect(correctMalaysianTypographyOcr('JRD8888', { ocrConfidence: 0.97 }).normalized).toBe('JRD8888');
+    expect(isPossibleMatch('SRM3028', 'SAM3028')).toBe(true);
   });
 
   it('ranks registered special prefixes by probability evidence', () => {

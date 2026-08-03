@@ -418,12 +418,14 @@ function scoreObservedPrefixChar(observedRaw: string, target: string): number {
 
 function isLikelyAlphaConfusion(observed: string, target: string): boolean {
   const confusions: Record<string, string[]> = {
+    A: ['R'],
     B: ['R'],
     D: ['O', 'Q'],
     I: ['L'],
     L: ['I'],
     O: ['D', 'Q'],
     Q: ['O', 'D'],
+    R: ['A', 'B'],
     S: ['Z'],
     U: ['V'],
     V: ['U', 'Y'],

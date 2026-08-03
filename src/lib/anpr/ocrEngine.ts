@@ -1,5 +1,10 @@
 import { createWorker, Worker } from 'tesseract.js';
-import { normalizePlate, formatDisplayPlate, generateCandidatePlates } from './normaliser';
+import {
+  normalizePlate,
+  formatDisplayPlate,
+  generateCandidatePlates,
+  correctMalaysianTypographyOcr,
+} from './normaliser';
 import { validateMalaysianPattern } from './patterns';
 import { CharacterConfidence, PlateCategory, PlateLayout } from '../db/types';
 import { recognizeWithPpOcr } from './ppOcrEngine';
@@ -61,8 +66,9 @@ export async function recognizePlateFromCanvas(
         engineUsed: 'PP_OCR',
       }];
 
-      if (shouldRunSpecialAdaptiveOcrPass(cropCanvas, candidates[0])) {
-        const adaptiveResults = await runSpecialAdaptiveOcrPass(cropCanvas, isTwoLineHint);
+      const specialVariants = getSpecialAdaptiveOcrVariants(cropCanvas, candidates[0]);
+      if (specialVariants.length > 0) {
+        const adaptiveResults = await runSpecialAdaptiveOcrPass(cropCanvas, specialVariants, isTwoLineHint);
         candidates.push(...adaptiveResults);
       }
 
@@ -89,10 +95,10 @@ const SPECIAL_OCR_PREPROCESSING: PreprocessVariant[] = [
   'INVERTED',
 ];
 
-function shouldRunSpecialAdaptiveOcrPass(
+function getSpecialAdaptiveOcrVariants(
   cropCanvas: HTMLCanvasElement,
   result: OcrRecognitionResult
-): boolean {
+): PreprocessVariant[] {
   const confidence = result.confidence;
   const plate = result.normalizedPlate || result.text;
   const pattern = validateMalaysianPattern(plate);
@@ -108,16 +114,31 @@ function shouldRunSpecialAdaptiveOcrPass(
     plate.length >= 9 ||
     aspect >= 5.8;
 
-  if (!specialLikely) return false;
-  if (confidence >= 0.97 && pattern.isValid && pattern.score >= 0.70) return false;
+  if (!specialLikely) return [];
+  if (adaptiveCategory && confidence >= 0.94 && pattern.isValid && pattern.score >= 0.78) return [];
+  if (confidence >= 0.97 && pattern.isValid && pattern.score >= 0.70) return [];
+
+  if (confidence >= 0.90 && (adaptiveCategory || potentialSpecial)) {
+    return ['CONTRAST_BOOST', 'WIDE_CROP', 'HIGHLIGHT_REDUCED'];
+  }
 
   const inVotingBand = confidence >= 0.80 && confidence < 0.97;
   const weakButSpecific = confidence >= 0.45 && (adaptiveCategory || potentialSpecial) && pattern.score >= 0.50;
-  return inVotingBand || weakButSpecific;
+
+  if (inVotingBand) {
+    return ['CONTRAST_BOOST', 'ADAPTIVE_THRESHOLD', 'CLAHE', 'SHARPEN', 'WIDE_CROP'];
+  }
+
+  if (weakButSpecific) {
+    return SPECIAL_OCR_PREPROCESSING.slice(0, 8);
+  }
+
+  return [];
 }
 
 async function runSpecialAdaptiveOcrPass(
   cropCanvas: HTMLCanvasElement,
+  variants: PreprocessVariant[],
   isTwoLineHint?: boolean
 ): Promise<OcrRecognitionResult[]> {
   const adaptiveCrops = generateAdaptiveCrops(
@@ -125,13 +146,13 @@ async function runSpecialAdaptiveOcrPass(
     { x: 0, y: 0, width: cropCanvas.width, height: cropCanvas.height, confidence: 1 },
     440,
     124,
-    SPECIAL_OCR_PREPROCESSING
+    variants
   );
 
   const results: OcrRecognitionResult[] = [];
 
   try {
-    for (const crop of adaptiveCrops.slice(0, 8)) {
+    for (const crop of adaptiveCrops) {
       const result = await recognizeWithPpOcr(crop.canvas, isTwoLineHint || crop.isTwoLine);
       if (!result) continue;
       results.push({
@@ -210,7 +231,8 @@ export async function recognizeWithTesseract(
       const topConf = (topRes.data.confidence || 0) / 100;
       const botConf = (botRes.data.confidence || 0) / 100;
       const avgConf = Math.min(1.0, (topConf + botConf) / 2);
-      const normMerged = correctMalaysianPlateOcr(rawMerged, { ocrConfidence: avgConf }).normalized;
+      const specialCorrected = correctMalaysianPlateOcr(rawMerged, { ocrConfidence: avgConf }).normalized;
+      const normMerged = correctMalaysianTypographyOcr(specialCorrected, { ocrConfidence: avgConf }).normalized;
 
       const patternVal = validateMalaysianPattern(normMerged);
       const charConfs: CharacterConfidence[] = normMerged.split('').map((char, i) => ({
@@ -244,7 +266,8 @@ export async function recognizeWithTesseract(
   const result = await worker.recognize(cropCanvas);
   const rawText = result.data.text || '';
   const fullConf = Math.min(1.0, (result.data.confidence || 0) / 100);
-  const normText = correctMalaysianPlateOcr(rawText, { ocrConfidence: fullConf }).normalized;
+  const specialCorrected = correctMalaysianPlateOcr(rawText, { ocrConfidence: fullConf }).normalized;
+  const normText = correctMalaysianTypographyOcr(specialCorrected, { ocrConfidence: fullConf }).normalized;
 
   const patternVal = validateMalaysianPattern(normText);
   const charConfs: CharacterConfidence[] = [];

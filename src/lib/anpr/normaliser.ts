@@ -1,6 +1,18 @@
 import { CharacterConfidence, PlateCategory } from '../db/types';
 import { findSpecialSeriesPrefix, generateSpecialPlateCandidates } from './specialSeries';
 
+export interface TypographyCorrectionResult {
+  normalized: string;
+  corrected: boolean;
+  alternatives: string[];
+  reason: 'NONE' | 'SABAH_STYLIZED_A';
+}
+
+export interface TypographyCorrectionOptions {
+  ocrConfidence?: number;
+  characterConfidences?: CharacterConfidence[];
+}
+
 /**
  * Normalises a raw plate string according to Malaysian ANPR rules:
  * - Upper-cased
@@ -99,6 +111,11 @@ export const CONFUSION_MAP: Record<string, string[]> = {
   'Q': ['0', 'O'],
 };
 
+const STYLIZED_PREFIX_CONFUSIONS: Record<string, string[]> = {
+  A: ['R'],
+  R: ['A'],
+};
+
 /**
  * Position-aware candidate generator for OCR character ambiguity.
  *
@@ -115,6 +132,11 @@ export function generateCandidatePlates(
   if (!normalized) return [];
   const candidates = new Set<string>();
   generateSpecialPlateCandidates(normalized, maxPermutations).forEach((candidate) => {
+    if (candidate !== normalized && candidates.size < maxPermutations) {
+      candidates.add(candidate);
+    }
+  });
+  generateStylizedPrefixCandidates(normalized).forEach((candidate) => {
     if (candidate !== normalized && candidates.size < maxPermutations) {
       candidates.add(candidate);
     }
@@ -155,6 +177,56 @@ export function generateCandidatePlates(
         }
       }
     }
+  }
+
+  return Array.from(candidates);
+}
+
+export function correctMalaysianTypographyOcr(
+  raw: string,
+  options: TypographyCorrectionOptions = {}
+): TypographyCorrectionResult {
+  const normalized = normalizePlate(raw);
+  if (!normalized) {
+    return { normalized: '', corrected: false, alternatives: [], reason: 'NONE' };
+  }
+
+  const alternatives = generateStylizedPrefixCandidates(normalized);
+  const sabahStylizedA = /^SR([A-Z][0-9]{3,5}[A-Z]?)$/.exec(normalized);
+  if (!sabahStylizedA) {
+    return { normalized, corrected: false, alternatives, reason: 'NONE' };
+  }
+
+  const rConfidence = options.characterConfidences?.find((item) => item.position === 1)?.confidence;
+  const confidenceEvidence = Math.max(options.ocrConfidence ?? 0.85, rConfidence ?? 0.85);
+  const corrected = `SA${sabahStylizedA[1]}`;
+
+  if (confidenceEvidence >= 0.45) {
+    return {
+      normalized: corrected,
+      corrected: corrected !== normalized,
+      alternatives: Array.from(new Set([corrected, ...alternatives])),
+      reason: 'SABAH_STYLIZED_A',
+    };
+  }
+
+  return { normalized, corrected: false, alternatives, reason: 'NONE' };
+}
+
+function generateStylizedPrefixCandidates(normalized: string): string[] {
+  const match = /^([A-Z]{1,3})([0-9]{1,5}[A-Z]{0,2})$/.exec(normalized);
+  if (!match) return [];
+
+  const [, prefix, suffix] = match;
+  const candidates = new Set<string>();
+
+  for (let index = 0; index < prefix.length; index++) {
+    const replacements = STYLIZED_PREFIX_CONFUSIONS[prefix[index]];
+    if (!replacements) continue;
+
+    replacements.forEach((replacement) => {
+      candidates.add(`${prefix.slice(0, index)}${replacement}${prefix.slice(index + 1)}${suffix}`);
+    });
   }
 
   return Array.from(candidates);

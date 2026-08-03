@@ -9,7 +9,12 @@
  */
 
 import { CharacterConfidence, PlateCategory, PlateLayout } from '../db/types';
-import { normalizePlate, formatDisplayPlate, generateCandidatePlates } from './normaliser';
+import {
+  normalizePlate,
+  formatDisplayPlate,
+  generateCandidatePlates,
+  correctMalaysianTypographyOcr,
+} from './normaliser';
 import { validateMalaysianPattern } from './patterns';
 import { releaseCanvasMemory, splitTwoLineCrop } from './imageProcessor';
 import {
@@ -275,13 +280,18 @@ function buildPpOcrResult(
     ocrConfidence: confidence,
     characterConfidences,
   });
-  const correctedPlate = correction.normalized || normalizedPlate;
+  const typographyCorrection = correctMalaysianTypographyOcr(correction.normalized || normalizedPlate, {
+    ocrConfidence: confidence,
+    characterConfidences,
+  });
+  const correctedPlate = typographyCorrection.normalized;
   const patternVal = validateMalaysianPattern(correctedPlate);
   const alternatives = Array.from(new Set([
     ...correction.alternatives,
+    ...typographyCorrection.alternatives,
     ...generateCandidatePlates(correctedPlate, characterConfidences),
   ])).filter((candidate) => candidate !== correctedPlate);
-  const correctedConfidence = correction.corrected
+  const correctedConfidence = correction.corrected || typographyCorrection.corrected
     ? Math.min(1.0, confidence + Math.min(0.06, patternVal.score * 0.05))
     : confidence;
 
