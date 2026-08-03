@@ -4191,6 +4191,7 @@ export default function ScannerPage() {
     : language === 'BM'
     ? 'Imbasan disambung semula.'
     : 'Scanning has resumed.';
+  const scannerControlBusy = scannerReloadActive || scannerProcessingPaused;
   const visibleTrack = tracksList.find((track) => getTrackPlateText(track)) || tracksList[0] || null;
   const activeScanTileCount = supportsMultiCameraScan
     ? cameraSlots.filter((slot) => previewSlotIds.includes(slot.id)).length
