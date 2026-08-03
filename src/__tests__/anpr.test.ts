@@ -36,19 +36,31 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     expect(formatDisplayPlate('EV1234')).toBe('EV 1234');
     expect(formatDisplayPlate('KV1234E')).toBe('KV 1234 E');
     expect(formatDisplayPlate('W1234A')).toBe('W 1234 A');
+    expect(formatDisplayPlate('MALAYSIA200')).toBe('MALAYSIA 200');
+    expect(formatDisplayPlate('PUTRAJAYA1')).toBe('PUTRAJAYA 1');
+    expect(formatDisplayPlate('WXY77B8')).toBe('WXY 77 B8');
   });
 
   it('validates all 13 Malaysian plate pattern categories correctly', () => {
     expect(validateMalaysianPattern('EV1234').category).toBe('EV_SPECIAL');
+    expect(validateMalaysianPattern('EVA12345').category).toBe('EV_SPECIAL');
     expect(validateMalaysianPattern('KV1234E').category).toBe('LANGKAWI');
     expect(validateMalaysianPattern('W1234A').category).toBe('LETTER_NUMBER_SUFFIX');
     expect(validateMalaysianPattern('SAB1234').category).toBe('SABAH');
+    expect(validateMalaysianPattern('QAB1234').category).toBe('SARAWAK');
     expect(validateMalaysianPattern('QAA1234').category).toBe('SARAWAK');
     expect(validateMalaysianPattern('PUTRAJAYA1234').category).toBe('PUTRAJAYA');
+    expect(validateMalaysianPattern('PUTRAJAYA1').category).toBe('PUTRAJAYA');
     expect(validateMalaysianPattern('1122DP').category).toBe('DIPLOMATIC');
     expect(validateMalaysianPattern('Z1234').category).toBe('GOVERNMENT');
     expect(validateMalaysianPattern('PATRIOT123').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('MALAYSIA200').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('VEP1234').category).toBe('INSTITUTIONAL');
     expect(validateMalaysianPattern('JSD8888').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('WWW1').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('B20').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('A1').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('JQ1234').category).toBe('STANDARD');
   });
 
   it('generates character confusion candidates for OCR ambiguity', () => {
@@ -222,6 +234,12 @@ TEST1234,Farid,Proton,S70,Silver,Maybank,25000.00,MBB999,ACTIVE,New test case`;
   it('uses the plate-quality classifier class set', () => {
     expect(PLATE_QUALITY_CLASSES).toEqual([
       'GOOD',
+      'STANDARD_RECTANGLE',
+      'SQUARE_PLATE',
+      'TWO_LINE_PLATE',
+      'EV_WHITE_PLATE',
+      'SLIGHT_ROTATION',
+      'PERSPECTIVE_DISTORTION',
       'MOTION_BLUR',
       'OUT_OF_FOCUS',
       'TOO_SMALL',

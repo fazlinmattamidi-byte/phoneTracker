@@ -20,6 +20,12 @@ export type EnvironmentClass = (typeof ENVIRONMENT_CLASSES)[number];
 
 export const PLATE_QUALITY_CLASSES = [
   'GOOD',
+  'STANDARD_RECTANGLE',
+  'SQUARE_PLATE',
+  'TWO_LINE_PLATE',
+  'EV_WHITE_PLATE',
+  'SLIGHT_ROTATION',
+  'PERSPECTIVE_DISTORTION',
   'MOTION_BLUR',
   'OUT_OF_FOCUS',
   'TOO_SMALL',
@@ -102,6 +108,9 @@ export interface AdaptiveScannerConfig {
   track: {
     lifetimeMultiplier: number;
     prioritizeHighestConfidence: boolean;
+    maxPredictionFrames: number;
+    lostTrackTimeoutMs: number;
+    unconfirmedTrackTimeoutMs: number;
   };
   datasetFolder: string;
 }
@@ -175,7 +184,7 @@ export function createAdaptiveScannerConfig(
     },
     processing: {
       maxLongEdge: 1280,
-      preprocessingVariants: ['ORIGINAL', 'DARK_BG', 'INVERTED'],
+      preprocessingVariants: ['ORIGINAL', 'PERSPECTIVE', 'DARK_BG', 'INVERTED', 'CLAHE', 'HIGHLIGHT_REDUCED'],
       perspectiveRectification: true,
     },
     buffer: {
@@ -200,13 +209,16 @@ export function createAdaptiveScannerConfig(
       useInnerTextCrop: true,
     },
     qualityGate: {
-      acceptedClasses: ['GOOD'],
-      marginalClasses: ['LOW_CONTRAST', 'UNDEREXPOSED', 'OVEREXPOSED', 'GLARE_REFLECTION'],
+      acceptedClasses: ['GOOD', 'STANDARD_RECTANGLE', 'SQUARE_PLATE', 'TWO_LINE_PLATE', 'EV_WHITE_PLATE', 'SLIGHT_ROTATION'],
+      marginalClasses: ['LOW_CONTRAST', 'UNDEREXPOSED', 'OVEREXPOSED', 'GLARE_REFLECTION', 'PERSPECTIVE_DISTORTION', 'BAD_ANGLE'],
       minimumClassifierConfidence: 0.45,
     },
     track: {
       lifetimeMultiplier: 1,
       prioritizeHighestConfidence: false,
+      maxPredictionFrames: 2,
+      lostTrackTimeoutMs: 900,
+      unconfirmedTrackTimeoutMs: 260,
     },
     datasetFolder: `dataset/${environment.label.toLowerCase()}`,
   };
@@ -226,7 +238,7 @@ export function createAdaptiveScannerConfig(
           minConfidence: 0.32,
         },
         processing: {
-          preprocessingVariants: ['ORIGINAL', 'CLAHE', 'SHARPEN', 'DARK_BG', 'INVERTED'],
+          preprocessingVariants: ['ORIGINAL', 'PERSPECTIVE', 'CLAHE', 'SHARPEN', 'DARK_BG', 'INVERTED', 'GAMMA_BRIGHTEN'],
         },
         buffer: {
           maxSize: 9,
@@ -255,7 +267,7 @@ export function createAdaptiveScannerConfig(
           minConfidence: 0.40,
         },
         processing: {
-          preprocessingVariants: ['ORIGINAL', 'SHARPEN', 'NOISE_REDUCED', 'CLAHE'],
+          preprocessingVariants: ['ORIGINAL', 'PERSPECTIVE', 'SHARPEN', 'NOISE_REDUCED', 'CLAHE', 'DARK_BG'],
         },
         buffer: {
           maxSize: 10,
@@ -274,11 +286,14 @@ export function createAdaptiveScannerConfig(
           maxBestCropAgeMs: 3000,
         },
         qualityGate: {
-          marginalClasses: ['LOW_CONTRAST', 'UNDEREXPOSED', 'GLARE_REFLECTION'],
+          marginalClasses: ['LOW_CONTRAST', 'UNDEREXPOSED', 'GLARE_REFLECTION', 'PERSPECTIVE_DISTORTION', 'BAD_ANGLE'],
           minimumClassifierConfidence: 0.50,
         },
         track: {
           lifetimeMultiplier: environment.label === 'HEAVY_RAIN' ? 1.8 : 1.45,
+          maxPredictionFrames: 2,
+          lostTrackTimeoutMs: environment.label === 'HEAVY_RAIN' ? 1200 : 950,
+          unconfirmedTrackTimeoutMs: 320,
         },
       });
 
@@ -290,7 +305,7 @@ export function createAdaptiveScannerConfig(
           minConfidence: 0.38,
         },
         processing: {
-          preprocessingVariants: ['ORIGINAL', 'CLAHE', 'SHARPEN', 'NOISE_REDUCED'],
+          preprocessingVariants: ['ORIGINAL', 'PERSPECTIVE', 'CLAHE', 'SHARPEN', 'NOISE_REDUCED'],
         },
         buffer: {
           maxSize: 9,
@@ -306,8 +321,8 @@ export function createAdaptiveScannerConfig(
           maxCandidateCrops: 6,
         },
         qualityGate: {
-          acceptedClasses: ['GOOD'],
-          marginalClasses: [],
+          acceptedClasses: ['GOOD', 'STANDARD_RECTANGLE', 'SQUARE_PLATE', 'TWO_LINE_PLATE', 'EV_WHITE_PLATE', 'SLIGHT_ROTATION'],
+          marginalClasses: ['PERSPECTIVE_DISTORTION', 'BAD_ANGLE'],
           minimumClassifierConfidence: 0.52,
         },
       });
@@ -321,7 +336,7 @@ export function createAdaptiveScannerConfig(
           minConfidence: 0.38,
         },
         processing: {
-          preprocessingVariants: ['ORIGINAL', 'CLAHE', 'DARK_BG', 'INVERTED', 'SHARPEN'],
+          preprocessingVariants: ['ORIGINAL', 'PERSPECTIVE', 'HIGHLIGHT_REDUCED', 'CLAHE', 'DARK_BG', 'INVERTED', 'SHARPEN'],
         },
         buffer: {
           maxSize: 8,
@@ -349,7 +364,7 @@ export function createAdaptiveScannerConfig(
         },
         processing: {
           maxLongEdge: 960,
-          preprocessingVariants: ['ORIGINAL', 'SHARPEN', 'DARK_BG'],
+          preprocessingVariants: ['ORIGINAL', 'PERSPECTIVE', 'SHARPEN', 'DARK_BG', 'INVERTED'],
         },
         buffer: {
           maxSize: 4,
@@ -369,20 +384,54 @@ export function createAdaptiveScannerConfig(
         track: {
           lifetimeMultiplier: 0.8,
           prioritizeHighestConfidence: true,
+          maxPredictionFrames: 1,
+          lostTrackTimeoutMs: 420,
+          unconfirmedTrackTimeoutMs: 180,
         },
       });
 
     case 'TRAFFIC':
+      return mergeAdaptiveConfig(base, {
+        detector: {
+          targetIntervalMs: 65,
+          busyIntervalMs: 105,
+          minConfidence: 0.32,
+        },
+        buffer: {
+          maxSize: 5,
+          maxEntryAgeMs: 2600,
+          cropSampleIntervalMultiplier: 0.55,
+        },
+        ocr: {
+          firstReadMinQuality: 0.22,
+          repeatReadMinQuality: 0.20,
+          firstReadMinTrackConfidence: 0.54,
+          firstReadRetryMs: 55,
+          repeatReadRetryMs: 110,
+          requiredBufferedCrops: 1,
+          maxBestCropAgeMs: 900,
+          maxCandidateCrops: 3,
+          useInnerTextCrop: false,
+        },
+        track: {
+          lifetimeMultiplier: 0.7,
+          prioritizeHighestConfidence: true,
+          maxPredictionFrames: 1,
+          lostTrackTimeoutMs: 360,
+          unconfirmedTrackTimeoutMs: 160,
+        },
+      });
+
     case 'PARKING':
       return mergeAdaptiveConfig(base, {
         detector: {
-          targetIntervalMs: 90,
-          busyIntervalMs: 145,
+          targetIntervalMs: environment.label === 'PARKING' ? 140 : 90,
+          busyIntervalMs: environment.label === 'PARKING' ? 220 : 145,
         },
         buffer: {
-          maxSize: 8,
-          maxEntryAgeMs: 7000,
-          cropSampleIntervalMultiplier: 0.85,
+          maxSize: environment.label === 'PARKING' ? 9 : 8,
+          maxEntryAgeMs: environment.label === 'PARKING' ? 7500 : 7000,
+          cropSampleIntervalMultiplier: environment.label === 'PARKING' ? 1.1 : 0.85,
         },
         ocr: {
           maxConcurrency: 4,
@@ -390,8 +439,11 @@ export function createAdaptiveScannerConfig(
           maxCandidateCrops: 5,
         },
         track: {
-          lifetimeMultiplier: 1.35,
+          lifetimeMultiplier: environment.label === 'PARKING' ? 1.15 : 1.35,
           prioritizeHighestConfidence: true,
+          maxPredictionFrames: environment.label === 'PARKING' ? 2 : 1,
+          lostTrackTimeoutMs: environment.label === 'PARKING' ? 900 : 520,
+          unconfirmedTrackTimeoutMs: environment.label === 'PARKING' ? 280 : 180,
         },
       });
 

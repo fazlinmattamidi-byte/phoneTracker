@@ -27,6 +27,12 @@ from typing import Any, Iterable
 
 PLATE_QUALITY_CLASSES = [
     "GOOD",
+    "STANDARD_RECTANGLE",
+    "SQUARE_PLATE",
+    "TWO_LINE_PLATE",
+    "EV_WHITE_PLATE",
+    "SLIGHT_ROTATION",
+    "PERSPECTIVE_DISTORTION",
     "MOTION_BLUR",
     "OUT_OF_FOCUS",
     "TOO_SMALL",

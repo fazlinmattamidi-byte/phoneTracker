@@ -1164,9 +1164,9 @@ function clampPercentToThreshold(value: number, fallback: number, min: number, m
 
 function getExpectedMinPlateChars(crop: HTMLCanvasElement): number {
   const aspect = crop.width / Math.max(1, crop.height);
-  if (aspect >= 3.0) return 5;
+  if (aspect >= 3.0) return 4;
   if (aspect >= 2.3) return 4;
-  return 3;
+  return 2;
 }
 
 function countPlateChars(text: string): { letters: number; digits: number } {
@@ -1177,12 +1177,16 @@ function countPlateChars(text: string): { letters: number; digits: number } {
 }
 
 function isPlausiblePlateCandidate(text: string, expectedMinChars: number, patternScore: number): boolean {
-  if (!text || text.length < 3) return false;
+  if (!text || text.length < 2) return false;
 
   const { letters, digits } = countPlateChars(text);
   if (letters === 0 || digits === 0) return false;
 
-  const hasEnoughLength = text.length >= expectedMinChars || (text.length >= 3 && patternScore >= 0.85);
+  const pattern = validateMalaysianPattern(text);
+  const highValueShortPlate = text.length <= 3 && pattern.isValid && pattern.score >= 0.70;
+  if (highValueShortPlate) return true;
+
+  const hasEnoughLength = text.length >= expectedMinChars || (text.length >= 3 && Math.max(patternScore, pattern.score) >= 0.85);
   if (!hasEnoughLength) return false;
 
   if (text.length >= 5 && digits < 2) return false;
@@ -1211,7 +1215,7 @@ function canCommitNoMatchOutcome(text: string, confidence: number, score: number
   // must not finalize "no case"; partial reads like AN756 can look valid.
   if (voteCount < 2) return false;
   if (Math.max(confidence, score) < OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE) return false;
-  if (text.length < 3 || letters === 0 || digits === 0) return false;
+  if (text.length < 2 || letters === 0 || digits === 0) return false;
   if (text.length >= 5 && digits < 2) return false;
   if (!isCompleteNoMatchCandidate(text, pattern)) return false;
 
@@ -1225,8 +1229,9 @@ function isCompleteNoMatchCandidate(
   const { letters, digits } = countPlateChars(text);
   const category = pattern.category;
 
-  if (!pattern.isValid || letters === 0 || digits < 2 || text.length < 5) return false;
+  if (!pattern.isValid || letters === 0 || digits === 0 || text.length < 2) return false;
   if (category === 'UNKNOWN_VALID_CANDIDATE') return false;
+  if (text.length <= 3) return pattern.score >= 0.70;
   if (category === 'STANDARD') return digits >= 4;
   if (category === 'EV_SPECIAL') return digits >= 3;
   if (category === 'LETTER_NUMBER_SUFFIX') return pattern.hasTrailingSuffix && digits >= 2;
@@ -1245,12 +1250,13 @@ function isCompleteSingleReadCandidate(
   const category = pattern.category;
   const patternId = pattern.pattern?.id ?? '';
 
-  if (letters === 0 || digits < 2) return false;
-  if (text.length < 5) return false;
+  if (letters === 0 || digits === 0) return false;
+  if (text.length < 2) return false;
   if (text.length > 10 && pattern.score < 0.80) return false;
+  if (text.length <= 3) return pattern.isValid && pattern.score >= 0.70;
 
   if (category === 'STANDARD') {
-    return digits >= 4;
+    return digits >= 4 || text.length <= 4;
   }
 
   if (category === 'LETTER_NUMBER_SUFFIX') {
@@ -1263,7 +1269,7 @@ function isCompleteSingleReadCandidate(
   }
 
   if (category === 'EV_SPECIAL') {
-    return digits >= 3;
+    return digits >= 3 || text.length <= 4;
   }
 
   if (category === 'DIPLOMATIC') {
@@ -1320,8 +1326,7 @@ function isOcrResultStillUseful(track: ActiveTrack, now: number = Date.now()): b
 
 function isTrackDrawable(track: ActiveTrack): boolean {
   if (track.trackState === 'REMOVED') return false;
-  if (track.trackState === 'VISIBLE') return true;
-  return (track.missedFrames ?? 0) <= 2;
+  return track.trackState === 'VISIBLE' && track.visibleThisFrame !== false;
 }
 
 function getMotionOcrMode(track: ActiveTrack): MotionOcrMode {
@@ -1343,9 +1348,9 @@ function canAttemptOcrForMotion(track: ActiveTrack, mode: MotionOcrMode): boolea
   if (mode === 'NORMAL') return true;
   if (mode === 'UNSTABLE') return getTrackVoteCount(track) === 0 || track.framesSeen % 2 === 0;
   if (mode === 'COLLECT_ONLY') {
-    return getTrackVoteCount(track) === 0 && track.framesSeen >= OCR_MIN_TRACK_FRAMES && track.framesSeen % 2 === 0;
+    return getTrackVoteCount(track) === 0 && (track.bbox.confidence >= 0.55 || track.framesSeen >= OCR_MIN_TRACK_FRAMES);
   }
-  return false;
+  return getTrackVoteCount(track) === 0 && track.bbox.confidence >= 0.65;
 }
 
 function getOcrQueuePressure(
@@ -1383,6 +1388,47 @@ function shouldSkipTrackForOcrPressure(
   }
 
   return priorityIndex >= Math.max(1, maxConcurrency) || (track.trackConfidence ?? 0) < 0.86 || qualityScore < 0.48;
+}
+
+function getMotionAwareDetectorTargetMs(
+  adaptiveConfig: AdaptiveScannerConfig,
+  tier: DeviceTier,
+  tracks: ActiveTrack[]
+): number {
+  const tierTarget = getTierDetectorTargetMs(tier);
+  const peakMotion = tracks.reduce((max, track) => Math.max(max, track.motionScore ?? 0), 0);
+  const movingEnvironment = adaptiveConfig.environment.label === 'HIGHWAY' || adaptiveConfig.environment.label === 'TRAFFIC';
+  const parkedEnvironment = adaptiveConfig.environment.label === 'PARKING';
+
+  if (movingEnvironment || peakMotion >= MOTION_UNSTABLE_MAX) {
+    return Math.max(DETECTION_MIN_DELAY_MS, Math.min(adaptiveConfig.detector.targetIntervalMs, Math.round(tierTarget * 0.72)));
+  }
+
+  if (peakMotion >= MOTION_NORMAL_MAX) {
+    return Math.max(DETECTION_MIN_DELAY_MS, Math.min(tierTarget, adaptiveConfig.detector.targetIntervalMs));
+  }
+
+  if (parkedEnvironment && tracks.length > 0) {
+    return Math.max(adaptiveConfig.detector.targetIntervalMs, Math.round(tierTarget * 1.25));
+  }
+
+  return Math.max(adaptiveConfig.detector.targetIntervalMs, tierTarget);
+}
+
+function getMotionAwareCropSampleIntervalMs(
+  track: ActiveTrack,
+  baseIntervalMs: number,
+  adaptiveConfig: AdaptiveScannerConfig
+): number {
+  const motion = track.motionScore ?? 0;
+  const movingEnvironment = adaptiveConfig.environment.label === 'HIGHWAY' || adaptiveConfig.environment.label === 'TRAFFIC';
+  const multiplier = movingEnvironment || motion >= MOTION_UNSTABLE_MAX
+    ? 0.45
+    : motion >= MOTION_NORMAL_MAX
+      ? 0.65
+      : 1;
+
+  return Math.max(35, Math.round(baseIntervalMs * adaptiveConfig.buffer.cropSampleIntervalMultiplier * multiplier));
 }
 
 function pruneCooldownMap(cooldowns: Map<string, number>, cooldownMs: number, now: number): void {
@@ -3052,6 +3098,11 @@ export default function ScannerPage() {
         runtime.tracker.setLostTrackTimeout(
           Math.round((scannerSettings.lostTrackTimeout || INITIAL_SETTINGS.lostTrackTimeout) * adaptiveConfigRef.current.track.lifetimeMultiplier)
         );
+        runtime.tracker.configureRuntime({
+          maxPredictionFrames: adaptiveConfigRef.current.track.maxPredictionFrames,
+          lostTrackTimeoutMs: adaptiveConfigRef.current.track.lostTrackTimeoutMs,
+          unconfirmedTrackTimeoutMs: adaptiveConfigRef.current.track.unconfirmedTrackTimeoutMs,
+        });
         runtime.tracker.setMaxActiveTracks(scannerSettings.maxTracks || INITIAL_SETTINGS.maxTracks);
         let detectedPlates: Awaited<ReturnType<typeof detectMalaysianPlates>> = [];
 
@@ -3145,16 +3196,17 @@ export default function ScannerPage() {
           const needsFastFirstRead = isFastFirstReadCandidate(track);
           runtimeMetricsRef.current.motionBuckets[motionMode]++;
 
-          if (motionMode === 'PAUSED' && !needsFastFirstRead) {
+          if (motionMode === 'PAUSED' && !needsFastFirstRead && track.bbox.confidence < 0.65) {
             track.pipelineState = 'TRACKING';
             return;
           }
 
           const existingCrop = runtime.bestFrameSelector.getBestCrop(track.trackNumber);
-          const sampleInterval = getTierCropSampleIntervalMs(
+          const baseSampleInterval = getTierCropSampleIntervalMs(
             track.bbox.confidence >= 0.7 ? CROP_SAMPLE_FAST_MS : CROP_SAMPLE_NORMAL_MS,
             runtimeMetricsRef.current.deviceTier
-          ) * adaptiveConfigRef.current.buffer.cropSampleIntervalMultiplier;
+          );
+          const sampleInterval = getMotionAwareCropSampleIntervalMs(track, baseSampleInterval, adaptiveConfigRef.current);
           if (existingCrop && track.lastCropSampledAt && cropSampleNow - track.lastCropSampledAt < sampleInterval) {
             return;
           }
@@ -3194,25 +3246,33 @@ export default function ScannerPage() {
         processOcrQueue(readableConfirmedTracks, processingCanvas, scannerSettings, runtime, slotId);
         metrics.detFrames++;
 
+        const motionAwareTargetMs = getMotionAwareDetectorTargetMs(
+          adaptiveConfigRef.current,
+          runtimeMetricsRef.current.deviceTier,
+          readableConfirmedTracks
+        );
         const latencyDrivenInterval = clampNumber(
           Math.round(detectorElapsedMs * 1.45),
-          Math.max(
-            adaptiveConfigRef.current.detector.targetIntervalMs,
-            getTierDetectorTargetMs(runtimeMetricsRef.current.deviceTier)
-          ),
+          motionAwareTargetMs,
           Math.max(250, adaptiveConfigRef.current.detector.busyIntervalMs)
         );
         adaptiveDetectorIntervalMs = Math.round(
           adaptiveDetectorIntervalMs * 0.75 + latencyDrivenInterval * 0.25
         );
-        const targetInterval =
-          activeOcrCount.current > 0
-            ? Math.max(
+        const realtimeTrackingMode =
+          adaptiveConfigRef.current.environment.label === 'HIGHWAY' ||
+          adaptiveConfigRef.current.environment.label === 'TRAFFIC' ||
+          readableConfirmedTracks.some((track) => (track.motionScore ?? 0) >= MOTION_UNSTABLE_MAX);
+        let targetInterval = adaptiveDetectorIntervalMs;
+        if (activeOcrCount.current > 0) {
+          targetInterval = realtimeTrackingMode
+            ? Math.max(motionAwareTargetMs, Math.round(adaptiveDetectorIntervalMs * 0.9))
+            : Math.max(
                 adaptiveDetectorIntervalMs,
-                adaptiveConfigRef.current.detector.busyIntervalMs,
+                Math.max(motionAwareTargetMs, adaptiveConfigRef.current.detector.busyIntervalMs),
                 getTierDetectorBusyIntervalMs(runtimeMetricsRef.current.deviceTier)
-              )
-            : adaptiveDetectorIntervalMs;
+              );
+        }
         const nextDelay = Math.max(
           Math.max(DETECTION_MIN_DELAY_MS, adaptiveConfigRef.current.detector.minDelayMs),
           Math.round(targetInterval - (performance.now() - detectionStartedAt))

@@ -27,28 +27,43 @@ export function formatDisplayPlate(normalized: string, _category?: PlateCategory
   void _category;
   if (!normalized) return '';
 
-  // EV Special
-  if (normalized.startsWith('EV') && normalized.length > 2) {
-    return `EV ${normalized.substring(2)}`;
+  const longWordSeries = /^(PUTRAJAYA|MALAYSIA|PATRIOT|PROTON|PERODUA|PETRA|MADANI|BAMBEE|PERFECT|RIMAU|AIRFORCE|SUKMA|XXVIASEAN|ASEAN)([0-9]{1,5}[A-Z]?)$/.exec(normalized);
+  if (longWordSeries) {
+    return `${longWordSeries[1]} ${longWordSeries[2]}`;
+  }
+
+  // EV Special: EV 1234, EVA 1234, EVB 1234 A
+  const evMatch = /^(EV[A-Z]{0,2})([0-9]{1,5})([A-Z]?)$/.exec(normalized);
+  if (evMatch) {
+    return [evMatch[1], evMatch[2], evMatch[3]].filter(Boolean).join(' ');
   }
 
   // Langkawi with Suffix: KV 1234 E
-  if (normalized.startsWith('KV') && /[0-9]+[A-Z]$/.test(normalized)) {
-    const digits = normalized.substring(2, normalized.length - 1);
-    const suffix = normalized.charAt(normalized.length - 1);
-    return `KV ${digits} ${suffix}`;
+  const langkawiMatch = /^(KV)([0-9]{1,5})([A-Z]?)$/.exec(normalized);
+  if (langkawiMatch) {
+    return [langkawiMatch[1], langkawiMatch[2], langkawiMatch[3]].filter(Boolean).join(' ');
   }
 
   // Peninsular with Suffix: W 1234 A
-  const matchSuffix = /^([A-Z]{1,3})([0-9]{1,4})([A-Z])$/.exec(normalized);
+  const matchSuffix = /^([A-Z]{1,3})([0-9]{1,5})([A-Z]{1,2})$/.exec(normalized);
   if (matchSuffix) {
     return `${matchSuffix[1]} ${matchSuffix[2]} ${matchSuffix[3]}`;
   }
 
   // Standard 1-3 letters + digits: JSD 8888
-  const matchStd = /^([A-Z]{1,4})([0-9]{1,4})$/.exec(normalized);
+  const matchStd = /^([A-Z]{1,4})([0-9]{1,5})$/.exec(normalized);
   if (matchStd) {
     return `${matchStd[1]} ${matchStd[2]}`;
+  }
+
+  const mixedTail = /^([A-Z]{1,3})([0-9]{1,5})([A-Z][0-9])$/.exec(normalized);
+  if (mixedTail) {
+    return `${mixedTail[1]} ${mixedTail[2]} ${mixedTail[3]}`;
+  }
+
+  const alternatingGroups = normalized.match(/[A-Z]+|[0-9]+/g);
+  if (alternatingGroups && alternatingGroups.length > 1) {
+    return alternatingGroups.join(' ');
   }
 
   return normalized;

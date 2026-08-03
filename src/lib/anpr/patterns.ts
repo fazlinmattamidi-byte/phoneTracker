@@ -14,6 +14,10 @@ export interface PlatePatternDefinition {
   isStrict: boolean;
 }
 
+const LETTERS = '[A-Z]';
+const DIGITS = '[0-9]';
+const SHORT_NUMBER = `${DIGITS}{1,5}`;
+
 /**
  * Recognized Sabah state registration prefixes
  */
@@ -29,23 +33,26 @@ export const SARAWAK_PREFIXES = ['QA', 'QB', 'QC', 'QD', 'QK', 'QL', 'QP', 'QR',
  */
 export const SPECIAL_SERIES_PREFIXES = [
   'PATRIOT', 'PROTON', 'PERODUA', 'PETRA', 'MADANI', 'MALAYSIA', 'BAMBEE', 'G1M',
-  'VIP', 'PERFECT', 'RIMAU', 'NAVY', 'AIRFORCE', 'SUKMA', 'X', 'Y', 'V', 'FF',
-  'M1M', 'WW', 'UU', 'UG', 'UPM', 'UTM', 'UKM', 'USM', 'UUM', 'UIM', 'UITM', 'UMT', 'UMP'
+  'VIP', 'PERFECT', 'RIMAU', 'NAVY', 'AIRFORCE', 'SUKMA', 'JAGUH', 'NAAM', 'A1M',
+  'M1M', 'RAPID', 'GTR', 'GT', 'YY', 'UU', 'UG', 'UPM', 'UTM', 'UKM', 'USM', 'UUM',
+  'UIM', 'UITM', 'UMT', 'UMP', 'UIA', 'IIUM', 'XXVIASEAN', 'ASEAN',
 ];
+
+const SPECIAL_SERIES_REGEX = new RegExp(`^(${SPECIAL_SERIES_PREFIXES.join('|')})${SHORT_NUMBER}${LETTERS}?$`);
 
 /**
  * Configurable Malaysian Plate Pattern Registry.
  * Guiding candidate ranking without forcing rigid single regex locks.
  */
 export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
-  // 1. EV Special Registration Series (EV1 - EV9999)
+  // 1. EV Special Registration Series (EV1 - EV99999, then EVA/EVB-style running prefixes)
   {
     id: 'EV_SPECIAL',
     category: 'EV_SPECIAL',
-    description: 'Electric Vehicle EV Special Series (e.g. EV1234)',
-    regex: /^EV[0-9]{1,4}$/,
+    description: 'Electric Vehicle EV Special Series (e.g. EV1234, EVA1234)',
+    regex: /^EV[A-Z]{0,2}[0-9]{1,5}[A-Z]?$/,
     minLen: 3,
-    maxLen: 6,
+    maxLen: 9,
     priority: 100,
     isStrict: true,
   },
@@ -55,9 +62,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'LANGKAWI_SUFFIX',
     category: 'LANGKAWI',
     description: 'Langkawi Series with Alphabetic Suffix (e.g. KV1234E)',
-    regex: /^KV[0-9]{1,4}[A-Z]$/,
+    regex: /^KV[0-9]{1,5}[A-Z]$/,
     minLen: 4,
-    maxLen: 7,
+    maxLen: 8,
     hasTrailingSuffix: true,
     priority: 95,
     isStrict: true,
@@ -66,9 +73,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'LANGKAWI_STANDARD',
     category: 'LANGKAWI',
     description: 'Langkawi Standard Series (e.g. KV1234)',
-    regex: /^KV[0-9]{1,4}$/,
+    regex: /^KV[0-9]{1,5}$/,
     minLen: 3,
-    maxLen: 6,
+    maxLen: 7,
     priority: 90,
     isStrict: true,
   },
@@ -78,9 +85,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'LETTER_NUMBER_SUFFIX',
     category: 'LETTER_NUMBER_SUFFIX',
     description: 'KL/Peninsular Letter-Number-Letter Series (e.g. W1234A, V123A)',
-    regex: /^[A-Z]{1,2}[0-9]{1,4}[A-Z]$/,
+    regex: /^[A-Z]{1,3}[0-9]{1,5}[A-Z]{1,2}$/,
     minLen: 3,
-    maxLen: 7,
+    maxLen: 10,
     hasTrailingSuffix: true,
     priority: 85,
     isStrict: true,
@@ -91,9 +98,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'SABAH_SUFFIX',
     category: 'SABAH',
     description: 'Sabah Series with Suffix (e.g. SA1234A, SD1234K)',
-    regex: /^(SA|SB|SD|SK|SS|ST|SU|SW|S)[A-Z]{0,2}[0-9]{1,4}[A-Z]$/,
+    regex: /^(SA|SB|SD|SK|SS|ST|SU|SW|S)[A-Z]{0,2}[0-9]{1,5}[A-Z]$/,
     minLen: 3,
-    maxLen: 8,
+    maxLen: 9,
     hasTrailingSuffix: true,
     priority: 88,
     isStrict: true,
@@ -102,9 +109,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'SABAH_STANDARD',
     category: 'SABAH',
     description: 'Sabah Standard Series (e.g. SAB1234, SA1234, S1234)',
-    regex: /^(SA|SB|SD|SK|SS|ST|SU|SW|S)[A-Z]{0,2}[0-9]{1,4}$/,
+    regex: /^(SA|SB|SD|SK|SS|ST|SU|SW|S)[A-Z]{0,2}[0-9]{1,5}$/,
     minLen: 2,
-    maxLen: 8,
+    maxLen: 9,
     priority: 85,
     isStrict: true,
   },
@@ -114,9 +121,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'SARAWAK_SUFFIX',
     category: 'SARAWAK',
     description: 'Sarawak Series with Suffix (e.g. QAA1234A, QA1234A)',
-    regex: /^(QA|QB|QC|QD|QK|QL|QP|QR|QS|QT|Q)[A-Z]{0,2}[0-9]{1,4}[A-Z]$/,
+    regex: /^(QA|QB|QC|QD|QK|QL|QP|QR|QS|QT|Q)[A-Z]{0,2}[0-9]{1,5}[A-Z]$/,
     minLen: 3,
-    maxLen: 8,
+    maxLen: 9,
     hasTrailingSuffix: true,
     priority: 88,
     isStrict: true,
@@ -125,9 +132,9 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'SARAWAK_STANDARD',
     category: 'SARAWAK',
     description: 'Sarawak Standard Series (e.g. QAA1234, QK1234, Q1234)',
-    regex: /^(QA|QB|QC|QD|QK|QL|QP|QR|QS|QT|Q)[A-Z]{0,2}[0-9]{1,4}$/,
+    regex: /^(QA|QB|QC|QD|QK|QL|QP|QR|QS|QT|Q)[A-Z]{0,2}[0-9]{1,5}$/,
     minLen: 2,
-    maxLen: 7,
+    maxLen: 8,
     priority: 85,
     isStrict: true,
   },
@@ -136,10 +143,10 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
   {
     id: 'PUTRAJAYA',
     category: 'PUTRAJAYA',
-    description: 'Putrajaya Series (e.g. PUTRAJAYA1234, F1234)',
-    regex: /^PUTRAJAYA[0-9]{1,4}$/,
+    description: 'Putrajaya Series (e.g. PUTRAJAYA1, PUTRAJAYA1234)',
+    regex: /^PUTRAJAYA[0-9]{1,5}$/,
     minLen: 10,
-    maxLen: 13,
+    maxLen: 14,
     priority: 85,
     isStrict: true,
   },
@@ -149,7 +156,7 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'DIPLOMATIC',
     category: 'DIPLOMATIC',
     description: 'Diplomatic / Consular Series (e.g. 1122DP, DP1234, CC1234)',
-    regex: /^([0-9]{1,3}[0-9]{1,3}(DP|DC|CC|UN)|(DP|DC|CC|UN)[0-9]{1,4})$/,
+    regex: /^([0-9]{1,6}(DP|DC|CC|UN)|(DP|DC|CC|UN)[0-9]{1,5})$/,
     minLen: 3,
     maxLen: 8,
     priority: 90,
@@ -161,45 +168,57 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     id: 'GOVERNMENT',
     category: 'GOVERNMENT',
     description: 'Government & Enforcement Series (e.g. Z1234, JKR1234, POLIS1234)',
-    regex: /^(Z|JKR|POLIS|TDM|TLDM|TUDM|APMM|PRISON|KASTAM)[0-9]{1,4}[A-Z]?$/,
+    regex: /^(Z|JKR|POLIS|TDM|TLDM|TUDM|APMM|PRISON|KASTAM)[0-9]{1,5}[A-Z]?$/,
     minLen: 2,
-    maxLen: 10,
+    maxLen: 11,
     priority: 82,
     isStrict: true,
   },
 
-  // 9. Approved Special / Institutional Series (PATRIOT123, UTM1234, MADANI1)
+  // 9. Institutional / permit-like prefixes encountered on Malaysian roads
+  {
+    id: 'INSTITUTIONAL_PREFIX',
+    category: 'INSTITUTIONAL',
+    description: 'Institutional or permit-style prefix series (e.g. VEP1234)',
+    regex: /^(VEP|JPJ|MOT|SPAD|LPT|PLUS|PRASARANA)[0-9]{1,5}[A-Z]?$/,
+    minLen: 4,
+    maxLen: 11,
+    priority: 83,
+    isStrict: false,
+  },
+
+  // 10. Approved Special / Institutional Series (PATRIOT123, UTM1234, MADANI1)
   {
     id: 'SPECIAL_SERIES',
     category: 'SPECIAL_SERIES',
     description: 'Special & Commemorative Approved Series (e.g. MADANI123, PATRIOT1)',
-    regex: /^(PATRIOT|PROTON|PERODUA|PETRA|MADANI|MALAYSIA|BAMBEE|G1M|VIP|PERFECT|RIMAU|NAVY|AIRFORCE|SUKMA|UPM|UTM|UKM|USM|UUM|UIM|UITM|UMT|UMP)[0-9]{1,4}[A-Z]?$/,
+    regex: SPECIAL_SERIES_REGEX,
     minLen: 3,
-    maxLen: 12,
+    maxLen: 15,
     priority: 80,
     isStrict: false,
   },
 
-  // 10. Standard Peninsular Letter-Number Sequences (A1, A1234, ABC1234, VAB1234)
+  // 11. Standard Peninsular Letter-Number Sequences (A1, A1234, ABC1234, VAB1234)
   {
     id: 'STANDARD_PENINSULAR',
     category: 'STANDARD',
-    description: 'Standard Peninsular Series (1-3 letters + 1-4 digits)',
-    regex: /^[A-Z]{1,3}[0-9]{1,4}$/,
+    description: 'Standard Peninsular Series (1-3 letters + 1-5 digits)',
+    regex: /^[A-Z]{1,3}[0-9]{1,5}$/,
     minLen: 2,
-    maxLen: 7,
+    maxLen: 8,
     priority: 70,
     isStrict: false,
   },
 
-  // 11. Generic Valid Malaysian Candidate Fallback
+  // 12. Generic Valid Malaysian Candidate Fallback
   {
     id: 'GENERIC_MALAYSIAN',
     category: 'UNKNOWN_VALID_CANDIDATE',
-    description: 'Generic valid alphanumeric sequence (3-10 chars, letter + digit)',
-    regex: /^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3,10}$/,
-    minLen: 3,
-    maxLen: 10,
+    description: 'Generic valid alphanumeric sequence (2-15 chars, letter + digit)',
+    regex: /^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{2,15}$/,
+    minLen: 2,
+    maxLen: 15,
     priority: 10,
     isStrict: false,
   },

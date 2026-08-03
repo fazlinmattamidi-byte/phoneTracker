@@ -56,6 +56,8 @@ export function assessCropQuality(cropCanvas: HTMLCanvasElement): CropQualityRep
   let minLuma = 255;
   let maxLuma = 0;
   let blownOutPixels = 0; // Overexposed (glare)
+  let brightPixels = 0;
+  let darkPixels = 0;
   const lumaArray = new Float32Array(totalPixels);
 
   for (let i = 0; i < totalPixels; i++) {
@@ -69,6 +71,8 @@ export function assessCropQuality(cropCanvas: HTMLCanvasElement): CropQualityRep
     if (luma < minLuma) minLuma = luma;
     if (luma > maxLuma) maxLuma = luma;
     if (luma > 245) blownOutPixels++;
+    if (luma > 205) brightPixels++;
+    if (luma < 40) darkPixels++;
   }
 
   const avgLuma = sumLuma / totalPixels;
@@ -82,7 +86,12 @@ export function assessCropQuality(cropCanvas: HTMLCanvasElement): CropQualityRep
 
   // Glare score (ratio of blown out pixels)
   const glareRatio = blownOutPixels / totalPixels;
-  const glareScore = Math.min(1.0, glareRatio * 3.5);
+  const brightRatio = brightPixels / totalPixels;
+  const darkRatio = darkPixels / totalPixels;
+  const likelyWhitePlate = brightRatio > 0.42 && darkRatio > 0.025 && contrastScore > 0.22;
+  const glareScore = likelyWhitePlate
+    ? Math.min(1.0, Math.max(0, glareRatio - 0.10) * 3.0)
+    : Math.min(1.0, glareRatio * 3.5);
 
   // 2. Laplacian Variance (Blur Detection)
   let laplacianSum = 0;
@@ -132,11 +141,12 @@ export function assessCropQuality(cropCanvas: HTMLCanvasElement): CropQualityRep
 
   // 4. Aspect Ratio Score
   const aspect = width / Math.max(1, height);
-  // Malaysian plates typically range from 1.5 to 5.0 (long 1-line or square 2-line)
+  // Malaysian plates include long single-line, square/two-line rear, motorcycle,
+  // commercial, and JPJePlate crops. Only penalize truly implausible geometry.
   let aspectRatioScore = 1.0;
-  if (aspect < 1.2 || aspect > 6.0) {
+  if (aspect < 0.65 || aspect > 7.2) {
     aspectRatioScore = 0.3;
-  } else if (aspect < 1.5 || aspect > 5.2) {
+  } else if (aspect < 0.85 || aspect > 6.3) {
     aspectRatioScore = 0.7;
   }
 

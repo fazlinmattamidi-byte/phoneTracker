@@ -388,8 +388,8 @@ async function runLocalOnnxDetectionExclusive(
     const detections: DetectedPlateBox[] = [];
 
     // Relative Minimum Detection Sizes
-    const minBoxW = Math.max(45, canvas.width * 0.035);
-    const minBoxH = Math.max(12, canvas.height * 0.015);
+    const minBoxW = Math.max(32, canvas.width * 0.022);
+    const minBoxH = Math.max(9, canvas.height * 0.008);
 
     for (let i = 0; i < numAnchors; i++) {
       let cx: number, cy: number, w: number, h: number, objConf: number, classConf: number;
@@ -479,16 +479,17 @@ function applyFiltersAndNMS(
   canvasWidth: number,
   canvasHeight: number
 ): DetectedPlateBox[] {
-  const minW = Math.max(35, canvasWidth * 0.025);
-  const minH = Math.max(10, canvasHeight * 0.010);
+  const minW = Math.max(28, canvasWidth * 0.018);
+  const minH = Math.max(8, canvasHeight * 0.007);
 
   const filtered = boxes.filter(box => {
     const { width, height } = box.bbox;
     if (width < minW || height < minH) return false;
     
     const ar = width / height;
-    // single line (~2.0 to 6.0), two line (~0.8 to 2.5) -> overall 0.8 to 6.5
-    if (ar < 0.8 || ar > 6.5) return false;
+    // Malaysian plates include square/two-line rear and motorcycle plates,
+    // long JPJePlate/commercial plates, plus framed/recessed crops.
+    if (ar < 0.65 || ar > 7.2) return false;
     
     return true;
   });

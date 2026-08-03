@@ -517,8 +517,7 @@ export async function recoverCorrectablePlateCrop(
   options: PlateQualityModelOptions = {}
 ): Promise<{ crop: HTMLCanvasElement; assessment: PlateQualityResult; variant: PreprocessVariant } | null> {
   if (!isCorrectableQualityClass(initialAssessment.primaryClass)) return null;
-  const variants = getQualityPreprocessingPlan(initialAssessment.primaryClass)
-    .filter((variant) => variant !== 'PERSPECTIVE');
+  const variants = getQualityPreprocessingPlan(initialAssessment.primaryClass);
 
   for (const variant of variants) {
     const [candidate] = generateAdaptiveCrops(

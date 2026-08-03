@@ -11,6 +11,7 @@
 import { CharacterConfidence, PlateCategory, PlateLayout } from '../db/types';
 import { normalizePlate, formatDisplayPlate, generateCandidatePlates } from './normaliser';
 import { validateMalaysianPattern } from './patterns';
+import { releaseCanvasMemory, splitTwoLineCrop } from './imageProcessor';
 import {
   canUseWebGpuExecutionProvider,
   configureOrtWasm,
@@ -209,53 +210,40 @@ export async function recognizeWithPpOcr(
   const isTwoLine = isTwoLineHint || ar < 2.3;
 
   if (isTwoLine) {
-    const halfH = Math.round(cropCanvas.height * 0.54);
+    const lineCrops = splitTwoLineCrop(cropCanvas);
 
-    const topCanvas = document.createElement('canvas');
-    topCanvas.width = cropCanvas.width;
-    topCanvas.height = halfH;
-    const topCtx = topCanvas.getContext('2d');
-    if (topCtx) topCtx.drawImage(cropCanvas, 0, 0, cropCanvas.width, halfH, 0, 0, topCanvas.width, halfH);
+    try {
+      const [topRes, botRes, fullRes] = await Promise.all([
+        runSingleCropPpOcr(lineCrops.top),
+        runSingleCropPpOcr(lineCrops.bottom),
+        runSingleCropPpOcr(cropCanvas),
+      ]);
 
-    const botCanvas = document.createElement('canvas');
-    botCanvas.width = cropCanvas.width;
-    botCanvas.height = cropCanvas.height - halfH;
-    const botCtx = botCanvas.getContext('2d');
-    if (botCtx) botCtx.drawImage(cropCanvas, 0, halfH, cropCanvas.width, cropCanvas.height - halfH, 0, 0, botCanvas.width, botCanvas.height);
+      const candidates: PpOcrRecognitionResult[] = [];
+      const topText = normalizePlate(topRes.rawText);
+      const botText = normalizePlate(botRes.rawText);
+      const mergedRaw = normalizePlate(`${topText}${botText}`);
 
-    const [topRes, botRes] = await Promise.all([
-      runSingleCropPpOcr(topCanvas),
-      runSingleCropPpOcr(botCanvas),
-    ]);
+      if (mergedRaw.length >= 2) {
+        const avgConf = Math.min(1.0, (topRes.confidence + botRes.confidence) / 2);
+        const charConfs: CharacterConfidence[] = mergedRaw.split('').map((char, i) => ({
+          char,
+          confidence: i < topText.length ? topRes.confidence : botRes.confidence,
+          position: i,
+        }));
+        candidates.push(buildPpOcrResult(mergedRaw, avgConf, charConfs, ar < 1.6 ? 'SQUARE' : 'TWO_LINE'));
+      }
 
-    const topText = normalizePlate(topRes.rawText);
-    const botText = normalizePlate(botRes.rawText);
-    const mergedRaw = normalizePlate(`${topText}${botText}`);
+      const fullText = normalizePlate(fullRes.rawText);
+      if (fullText.length >= 2) {
+        candidates.push(buildPpOcrResult(fullText, fullRes.confidence, normalizeCharacterConfidences(fullRes), 'SINGLE_LINE'));
+      }
 
-    if (mergedRaw && mergedRaw.length >= 2) {
-      const avgConf = Math.min(1.0, (topRes.confidence + botRes.confidence) / 2);
-      const patternVal = validateMalaysianPattern(mergedRaw);
-      const charConfs: CharacterConfidence[] = mergedRaw.split('').map((char, i) => ({
-        char,
-        confidence: i < topText.length ? topRes.confidence : botRes.confidence,
-        position: i,
-      }));
-
-      const alternatives = generateCandidatePlates(mergedRaw, charConfs);
-
-      return {
-        text: mergedRaw,
-        normalizedPlate: mergedRaw,
-        displayPlate: formatDisplayPlate(mergedRaw, patternVal.category),
-        confidence: avgConf,
-        characterConfidences: charConfs,
-        alternativeCandidates: alternatives,
-        layout: ar < 1.6 ? 'SQUARE' : 'TWO_LINE',
-        category: patternVal.category,
-        patternScore: patternVal.score,
-        hasTrailingSuffix: patternVal.hasTrailingSuffix,
-        engineUsed: 'PP_OCR',
-      };
+      const best = chooseBestOcrCandidate(candidates);
+      if (best) return best;
+    } finally {
+      releaseCanvasMemory(lineCrops.top);
+      releaseCanvasMemory(lineCrops.bottom);
     }
   }
 
@@ -286,6 +274,85 @@ export async function recognizeWithPpOcr(
     hasTrailingSuffix: patternVal.hasTrailingSuffix,
     engineUsed: 'PP_OCR',
   };
+}
+
+function buildPpOcrResult(
+  normalizedPlate: string,
+  confidence: number,
+  characterConfidences: CharacterConfidence[],
+  layout: PlateLayout
+): PpOcrRecognitionResult {
+  const patternVal = validateMalaysianPattern(normalizedPlate);
+  const alternatives = generateCandidatePlates(normalizedPlate, characterConfidences);
+
+  return {
+    text: normalizedPlate,
+    normalizedPlate,
+    displayPlate: formatDisplayPlate(normalizedPlate, patternVal.category),
+    confidence,
+    characterConfidences,
+    alternativeCandidates: alternatives,
+    layout,
+    category: patternVal.category,
+    patternScore: patternVal.score,
+    hasTrailingSuffix: patternVal.hasTrailingSuffix,
+    engineUsed: 'PP_OCR',
+  };
+}
+
+function normalizeCharacterConfidences(result: {
+  rawText: string;
+  confidence: number;
+  characterConfidences: { char: string; confidence: number }[];
+}): CharacterConfidence[] {
+  const normalized = normalizePlate(result.rawText);
+  const fromEngine = result.characterConfidences
+    .map((candidate) => ({
+      char: normalizePlate(candidate.char),
+      confidence: candidate.confidence,
+    }))
+    .filter((candidate) => candidate.char.length === 1);
+
+  if (fromEngine.length === normalized.length) {
+    return fromEngine.map((candidate, position) => ({
+      char: candidate.char,
+      confidence: candidate.confidence,
+      position,
+    }));
+  }
+
+  return normalized.split('').map((char, position) => ({
+    char,
+    confidence: result.confidence,
+    position,
+  }));
+}
+
+function chooseBestOcrCandidate(candidates: PpOcrRecognitionResult[]): PpOcrRecognitionResult | null {
+  if (candidates.length === 0) return null;
+
+  const ranked = candidates
+    .filter((candidate) => candidate.normalizedPlate.length >= 2)
+    .map((candidate) => {
+      const pattern = validateMalaysianPattern(candidate.normalizedPlate);
+      const hasLetters = /[A-Z]/.test(candidate.normalizedPlate);
+      const hasDigits = /[0-9]/.test(candidate.normalizedPlate);
+      const lengthScore = Math.min(1, candidate.normalizedPlate.length / 7);
+      const layoutScore = candidate.layout === 'TWO_LINE' || candidate.layout === 'SQUARE' ? 0.06 : 0;
+      const implausiblePenalty = hasLetters && hasDigits ? 0 : 0.4;
+      const score =
+        candidate.confidence * 0.48 +
+        pattern.score * 0.34 +
+        lengthScore * 0.12 +
+        (pattern.isValid ? 0.08 : 0) +
+        layoutScore -
+        implausiblePenalty;
+
+      return { candidate, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.candidate ?? null;
 }
 
 /**

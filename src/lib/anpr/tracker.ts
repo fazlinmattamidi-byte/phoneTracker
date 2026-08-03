@@ -45,6 +45,12 @@ export interface TrackRuntimeStats {
   bestFrameReplacementCount?: number;
 }
 
+export interface TrackerRuntimeTuning {
+  maxPredictionFrames?: number;
+  lostTrackTimeoutMs?: number;
+  unconfirmedTrackTimeoutMs?: number;
+}
+
 export interface TrackCropSample {
   dataUrl?: string;
   qualityScore: number;
@@ -158,6 +164,8 @@ export class PlateTracker {
   private lostTrackTimeout: number = 20; // Frames before a confirmed track is pruned (~2s at 10 FPS)
   private lostTrackTimeoutMs: number = 2000; // Time-based expiration in milliseconds (invariant to FPS drops)
   private completedTrackLostTimeoutMs: number = 800;
+  private unconfirmedTrackTimeoutMs: number = 260;
+  private maxPredictionFrames: number = 2;
   private maxActiveTracks: number = 8;
   private minConfirmationFrames: number = 2;
 
@@ -181,19 +189,40 @@ export class PlateTracker {
   private getAssociationDistanceLimit(track: ActiveTrack, targetBox: BoundingBox, confidence: number): number {
     const baseSize = Math.max(targetBox.width, targetBox.height, 1);
     const framesMissing = Math.max(0, this.frameIndex - track.lastSeenFrame - 1);
-    const velocityBoost = Math.min(baseSize * 0.75, Math.hypot(track.vx, track.vy) * Math.max(1, framesMissing + 1));
-    const missedFrameBoost = Math.min(baseSize * 0.45, framesMissing * baseSize * 0.15);
+    const velocityBoost = Math.min(baseSize * 0.55, Math.hypot(track.vx, track.vy) * Math.max(1, framesMissing + 1));
+    const missedFrameBoost = Math.min(baseSize * 0.22, framesMissing * baseSize * 0.10);
     const confidenceBoost = confidence >= 0.70 ? baseSize * 0.15 : 0;
 
-    return baseSize * 1.65 + velocityBoost + missedFrameBoost + confidenceBoost;
+    return baseSize * 1.20 + velocityBoost + missedFrameBoost + confidenceBoost;
+  }
+
+  private shouldPredictTrack(track: ActiveTrack): boolean {
+    const dt = this.frameIndex - track.lastSeenFrame;
+    if (dt <= 0) return true;
+    if (track.cooldownActive || track.stabilizedPlate) return false;
+    return dt <= this.maxPredictionFrames;
+  }
+
+  private getAdaptiveSmoothAlpha(
+    motionScore: number,
+    associationIoU: number,
+    detectorConfidence: number,
+    baseAlpha: number
+  ): number {
+    if (detectorConfidence >= 0.82 && associationIoU < 0.10) return 1.0;
+    if (motionScore >= 0.30) return 0.96;
+    if (motionScore >= 0.18) return 0.86;
+    if (motionScore >= 0.08) return 0.64;
+    if (motionScore >= 0.03) return Math.max(baseAlpha, 0.42);
+    return Math.min(baseAlpha, 0.28);
   }
 
   private shouldSkipAssociationAfterGap(track: ActiveTrack): boolean {
     const frameGap = this.frameIndex - track.lastSeenFrame;
-    const hasOcrMemory = track.cooldownActive || Boolean(track.stabilizedPlate) || track.votes.size > 0;
 
     if (track.cooldownActive && frameGap > 1) return true;
-    if (hasOcrMemory && frameGap > 1) return true;
+    if (track.stabilizedPlate && frameGap > 1) return true;
+    if (track.votes.size > 0 && frameGap > Math.max(4, Math.floor(this.lostTrackTimeout * 0.35))) return true;
 
     return false;
   }
@@ -277,17 +306,24 @@ export class PlateTracker {
 
     track.vx = track.vx * (1 - velocityAlpha) + dx * velocityAlpha;
     track.vy = track.vy * (1 - velocityAlpha) + dy * velocityAlpha;
-    track.motionScore = Math.min(2, Math.hypot(dx, dy) / motionDenominator);
+    const motionScore = Math.min(2, Math.hypot(dx, dy) / motionDenominator);
+    track.motionScore = motionScore;
 
     const now = Date.now();
     track.bbox = matchedBox;
 
     // EMA smoothing is only for UI display, so raw crops still use the detector bbox.
+    const adaptiveSmoothAlpha = this.getAdaptiveSmoothAlpha(
+      motionScore,
+      associationIoU,
+      matchedBox.confidence,
+      smoothAlpha
+    );
     track.smoothBbox = {
-      x: track.smoothBbox.x * (1 - smoothAlpha) + matchedBox.x * smoothAlpha,
-      y: track.smoothBbox.y * (1 - smoothAlpha) + matchedBox.y * smoothAlpha,
-      width: track.smoothBbox.width * (1 - smoothAlpha) + matchedBox.width * smoothAlpha,
-      height: track.smoothBbox.height * (1 - smoothAlpha) + matchedBox.height * smoothAlpha,
+      x: track.smoothBbox.x * (1 - adaptiveSmoothAlpha) + matchedBox.x * adaptiveSmoothAlpha,
+      y: track.smoothBbox.y * (1 - adaptiveSmoothAlpha) + matchedBox.y * adaptiveSmoothAlpha,
+      width: track.smoothBbox.width * (1 - adaptiveSmoothAlpha) + matchedBox.width * adaptiveSmoothAlpha,
+      height: track.smoothBbox.height * (1 - adaptiveSmoothAlpha) + matchedBox.height * adaptiveSmoothAlpha,
       confidence: matchedBox.confidence,
     };
 
@@ -343,13 +379,17 @@ export class PlateTracker {
     // 2. Predict next position for active tracks using velocity (Kalman/Constant Velocity model)
     this.activeTracks.forEach((track) => {
       const dt = this.frameIndex - track.lastSeenFrame;
-      track.predictedBbox = {
-        x: track.bbox.x + track.vx * dt,
-        y: track.bbox.y + track.vy * dt,
-        width: track.bbox.width,
-        height: track.bbox.height,
-        confidence: track.bbox.confidence,
-      };
+      if (this.shouldPredictTrack(track)) {
+        track.predictedBbox = {
+          x: track.bbox.x + track.vx * Math.min(dt, this.maxPredictionFrames),
+          y: track.bbox.y + track.vy * Math.min(dt, this.maxPredictionFrames),
+          width: track.bbox.width,
+          height: track.bbox.height,
+          confidence: track.bbox.confidence,
+        };
+      } else {
+        track.predictedBbox = undefined;
+      }
     });
 
     // 3. First Stage Association: Match Active Tracks with High Confidence Detections
@@ -363,6 +403,7 @@ export class PlateTracker {
       highConfDets.forEach(({ box, idx }) => {
         if (!unassignedHigh.has(idx)) return;
         const targetBox = track.predictedBbox || track.bbox;
+        if (!this.shouldPredictTrack(track) && calculateIoU(targetBox, box) <= this.iouThreshold) return;
         if (!this.isScaleCompatible(targetBox, box)) return;
 
         const iou = calculateIoU(targetBox, box);
@@ -385,7 +426,7 @@ export class PlateTracker {
 
       if (bestIdx !== -1) {
         const matchedBox = detectedBoxes[bestIdx];
-        this.markMatchedTrack(track, matchedBox, 0.30, 0.35, bestIoU);
+        this.markMatchedTrack(track, matchedBox, 0.62, 0.45, bestIoU);
         unassignedHigh.delete(bestIdx);
       }
     });
@@ -402,6 +443,7 @@ export class PlateTracker {
       lowConfDets.forEach(({ box, idx }) => {
         if (!unassignedLow.has(idx)) return;
         const targetBox = track.predictedBbox || track.bbox;
+        if (!this.shouldPredictTrack(track) && calculateIoU(targetBox, box) <= this.iouThreshold) return;
         if (!this.isScaleCompatible(targetBox, box)) return;
 
         const iou = calculateIoU(targetBox, box);
@@ -424,7 +466,7 @@ export class PlateTracker {
 
       if (bestIdx !== -1) {
         const matchedBox = detectedBoxes[bestIdx];
-        this.markMatchedTrack(track, matchedBox, 0.25, 0.25, bestIoU);
+        this.markMatchedTrack(track, matchedBox, 0.48, 0.36, bestIoU);
         unassignedLow.delete(bestIdx);
       }
     });
@@ -486,7 +528,7 @@ export class PlateTracker {
         ? track.cooldownActive
           ? this.completedTrackLostTimeoutMs
           : this.lostTrackTimeoutMs
-        : 600; // Unconfirmed expire quickly (600ms)
+        : this.unconfirmedTrackTimeoutMs;
       if (timeLostMs > timeoutMs) {
         track.trackState = 'REMOVED';
         track.pipelineState = track.cooldownActive ? 'FINISHED' : track.pipelineState;
@@ -499,6 +541,7 @@ export class PlateTracker {
       } else if (!track.visibleThisFrame) {
         track.missedFrames = Math.max(1, this.frameIndex - track.lastSeenFrame);
         track.trackState = 'LOST';
+        track.predictedBbox = undefined;
         track.trackConfidence = Math.round(Math.max(0, (track.trackConfidence ?? 0) * 0.65) * 100) / 100;
         if (track.stats) {
           track.stats.framesLost++;
@@ -524,6 +567,20 @@ export class PlateTracker {
     this.lostTrackTimeout = frames;
     this.lostTrackTimeoutMs = frames * 100;
     this.completedTrackLostTimeoutMs = Math.min(800, this.lostTrackTimeoutMs);
+  }
+
+  public configureRuntime(options: TrackerRuntimeTuning): void {
+    if (typeof options.maxPredictionFrames === 'number') {
+      this.maxPredictionFrames = Math.max(0, Math.min(4, Math.round(options.maxPredictionFrames)));
+    }
+    if (typeof options.lostTrackTimeoutMs === 'number') {
+      this.lostTrackTimeoutMs = Math.max(120, Math.min(2500, Math.round(options.lostTrackTimeoutMs)));
+      this.lostTrackTimeout = Math.max(1, Math.round(this.lostTrackTimeoutMs / 100));
+      this.completedTrackLostTimeoutMs = Math.min(500, this.lostTrackTimeoutMs);
+    }
+    if (typeof options.unconfirmedTrackTimeoutMs === 'number') {
+      this.unconfirmedTrackTimeoutMs = Math.max(80, Math.min(1000, Math.round(options.unconfirmedTrackTimeoutMs)));
+    }
   }
 
   public setMaxActiveTracks(maxTracks: number): void {

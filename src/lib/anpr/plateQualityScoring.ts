@@ -27,11 +27,15 @@ export interface PlateQualityMeasurements {
   detectorConfidence: number;
   cropWidth: number;
   cropHeight: number;
+  aspectRatio: number;
   sharpnessScore: number;
   contrastScore: number;
   brightnessScore: number;
   clippingPercentage: number;
   darkPixelRatio: number;
+  brightPixelRatio: number;
+  edgeDensity: number;
+  whitePlateLikelihood: number;
   perspectiveScore: number;
   occlusionEstimate: number;
   trackStability: number;
@@ -84,7 +88,6 @@ const HARD_REJECT_CLASSES = new Set<PlateQualityClass>([
   'OUT_OF_FOCUS',
   'TOO_SMALL',
   'OCCLUDED',
-  'BAD_ANGLE',
 ]);
 
 const CORRECTABLE_CLASSES = new Set<PlateQualityClass>([
@@ -92,6 +95,18 @@ const CORRECTABLE_CLASSES = new Set<PlateQualityClass>([
   'UNDEREXPOSED',
   'OVEREXPOSED',
   'GLARE_REFLECTION',
+  'SLIGHT_ROTATION',
+  'PERSPECTIVE_DISTORTION',
+  'BAD_ANGLE',
+]);
+
+const READABLE_LAYOUT_CLASSES = new Set<PlateQualityClass>([
+  'GOOD',
+  'STANDARD_RECTANGLE',
+  'SQUARE_PLATE',
+  'TWO_LINE_PLATE',
+  'EV_WHITE_PLATE',
+  'SLIGHT_ROTATION',
 ]);
 
 export function parsePlateQualityMetadata(value: unknown): PlateQualityMetadata {
@@ -181,8 +196,14 @@ export function getQualityPreprocessingPlan(primaryClass: PlateQualityClass): Pr
       return ['HIGHLIGHT_REDUCED', 'GRAYSCALE', 'DEFAULT_CONTRAST'];
     case 'GLARE_REFLECTION':
       return ['HIGHLIGHT_REDUCED', 'GRAYSCALE', 'DEFAULT_CONTRAST', 'INVERTED'];
+    case 'EV_WHITE_PLATE':
+      return ['INVERTED', 'HIGHLIGHT_REDUCED', 'GRAYSCALE'];
+    case 'SLIGHT_ROTATION':
+      return ['PERSPECTIVE', 'SHARPEN', 'CLAHE'];
+    case 'PERSPECTIVE_DISTORTION':
+      return ['PERSPECTIVE', 'CLAHE', 'SHARPEN'];
     case 'BAD_ANGLE':
-      return ['PERSPECTIVE'];
+      return ['PERSPECTIVE', 'CLAHE'];
     default:
       return [];
   }
@@ -228,8 +249,8 @@ export function measurePlateCrop(
   const detectorConfidence = clamp01(options.detectorConfidence ?? 0.75);
   const trackStability = clamp01(options.trackStability ?? 0.55);
   const occlusionEstimate = clamp01(
-    Math.max(0, pixelStats.darkPixelRatio - 0.58) * 1.25 +
-    Math.max(0, pixelStats.clippingPercentage - 0.22) * 0.85 +
+    Math.max(0, pixelStats.darkPixelRatio - 0.66) * 1.10 +
+    Math.max(0, pixelStats.clippingPercentage - 0.30) * 0.70 +
     Math.max(0, 0.22 - report.contrastScore) * 0.6
   );
 
@@ -239,11 +260,15 @@ export function measurePlateCrop(
       detectorConfidence,
       cropWidth: width,
       cropHeight: height,
+      aspectRatio,
       sharpnessScore: clamp01(report.sharpnessScore),
       contrastScore: clamp01(report.contrastScore),
       brightnessScore: clamp01(report.brightnessScore),
       clippingPercentage: pixelStats.clippingPercentage,
       darkPixelRatio: pixelStats.darkPixelRatio,
+      brightPixelRatio: pixelStats.brightPixelRatio,
+      edgeDensity: pixelStats.edgeDensity,
+      whitePlateLikelihood: pixelStats.whitePlateLikelihood,
       perspectiveScore,
       occlusionEstimate,
       trackStability,
@@ -260,14 +285,15 @@ export function classifyHeuristicQuality(
 ): { primaryClass: PlateQualityClass; confidence: number; probabilities: Record<string, number> } {
   let primaryClass: PlateQualityClass = 'GOOD';
   let confidence = 0.76;
+  const aspect = measurements.aspectRatio;
 
   if (measurements.cropWidth < minReadableWidth || measurements.cropHeight < 18) {
     primaryClass = 'TOO_SMALL';
     confidence = 0.92;
-  } else if (measurements.occlusionEstimate >= 0.62) {
+  } else if (measurements.occlusionEstimate >= 0.74) {
     primaryClass = 'OCCLUDED';
     confidence = 0.84;
-  } else if (measurements.perspectiveScore <= 0.38 || measurements.aspectRatioScore <= 0.28) {
+  } else if (measurements.perspectiveScore <= 0.28 || measurements.aspectRatioScore <= 0.18) {
     primaryClass = 'BAD_ANGLE';
     confidence = 0.82;
   } else if (measurements.motionBlurScore >= 0.62) {
@@ -276,10 +302,16 @@ export function classifyHeuristicQuality(
   } else if (measurements.sharpnessScore <= 0.14) {
     primaryClass = 'OUT_OF_FOCUS';
     confidence = 0.88;
-  } else if (measurements.clippingPercentage >= 0.16 || measurements.brightnessScore <= 0.24 && measurements.clippingPercentage >= 0.08) {
+  } else if (measurements.perspectiveScore <= 0.52) {
+    primaryClass = 'PERSPECTIVE_DISTORTION';
+    confidence = 0.78;
+  } else if (measurements.aspectRatioScore <= 0.64 && measurements.perspectiveScore > 0.52) {
+    primaryClass = 'SLIGHT_ROTATION';
+    confidence = 0.74;
+  } else if (measurements.clippingPercentage >= 0.22 || measurements.brightnessScore <= 0.24 && measurements.clippingPercentage >= 0.10) {
     primaryClass = 'OVEREXPOSED';
     confidence = 0.82;
-  } else if (measurements.darkPixelRatio >= 0.58) {
+  } else if (measurements.darkPixelRatio >= 0.66) {
     primaryClass = 'UNDEREXPOSED';
     confidence = 0.82;
   } else if (measurements.clippingPercentage >= 0.07) {
@@ -288,6 +320,18 @@ export function classifyHeuristicQuality(
   } else if (measurements.contrastScore <= 0.18) {
     primaryClass = 'LOW_CONTRAST';
     confidence = 0.80;
+  } else if (measurements.whitePlateLikelihood >= 0.58) {
+    primaryClass = 'EV_WHITE_PLATE';
+    confidence = 0.80;
+  } else if (aspect > 0 && aspect <= 1.55) {
+    primaryClass = 'SQUARE_PLATE';
+    confidence = 0.78;
+  } else if (aspect > 0 && aspect < 2.35) {
+    primaryClass = 'TWO_LINE_PLATE';
+    confidence = 0.78;
+  } else if (aspect >= 2.35 && aspect <= 6.2 && measurements.sharpnessScore >= 0.28) {
+    primaryClass = 'STANDARD_RECTANGLE';
+    confidence = 0.82;
   } else if (measurements.sharpnessScore >= 0.50 && measurements.contrastScore >= 0.28) {
     primaryClass = 'GOOD';
     confidence = 0.88;
@@ -324,15 +368,25 @@ export function scorePlateQuality(input: PlateQualityScoreInput): PlateQualityDe
   const rejectionReasons = buildRejectionReasons(primaryClass, confidence, measurements, minQualityScore, qualityScore);
   const correctable = CORRECTABLE_CLASSES.has(primaryClass);
   const hardReject = HARD_REJECT_CLASSES.has(primaryClass) && confidence >= minimumClassifierConfidence;
-  const goodAccepted = primaryClass === 'GOOD' && confidence >= goodConfidenceThreshold;
-  const scoreAccepted = qualityScore >= minQualityScore && !hardReject && !correctable;
+  const readableLayout = READABLE_LAYOUT_CLASSES.has(primaryClass);
+  const goodAccepted = readableLayout && confidence >= goodConfidenceThreshold;
+  const correctableAccepted =
+    correctable &&
+    qualityScore >= minQualityScore + 0.04 &&
+    measurements.sharpnessScore >= 0.18 &&
+    measurements.contrastScore >= 0.14 &&
+    !hardReject;
+  const scoreAccepted = qualityScore >= minQualityScore && !hardReject && (!correctable || correctableAccepted);
   const acceptableForOCR = goodAccepted || scoreAccepted;
+  const preprocessingPlan = getQualityPreprocessingPlan(primaryClass);
 
   return {
     acceptableForOCR,
     qualityScore,
     rejectionReasons: acceptableForOCR ? [] : rejectionReasons,
-    selectedPreprocessing: acceptableForOCR ? ['ORIGINAL'] : getQualityPreprocessingPlan(primaryClass),
+    selectedPreprocessing: acceptableForOCR
+      ? (preprocessingPlan.length > 0 ? ['ORIGINAL', ...preprocessingPlan] : ['ORIGINAL'])
+      : preprocessingPlan,
     correctable,
   };
 }
@@ -349,29 +403,37 @@ function computeMeasurementScore(measurements: PlateQualityMeasurements): number
     measurements.sharpnessScore * 0.20 +
     measurements.contrastScore * 0.13 +
     measurements.brightnessScore * 0.10 +
-    measurements.perspectiveScore * 0.08 +
+    measurements.perspectiveScore * 0.07 +
     (1 - measurements.occlusionEstimate) * 0.09 +
+    measurements.edgeDensity * 0.03 +
     measurements.trackStability * 0.06 +
-    measurements.cropAgeScore * 0.05 -
+    measurements.cropAgeScore * 0.04 -
     exposurePenalty * 0.12
   );
 }
 
 function computeModelAcceptabilityScore(probabilities: Record<string, number>): number {
-  const good = probabilities.GOOD ?? 0;
+  const good =
+    (probabilities.GOOD ?? 0) +
+    (probabilities.STANDARD_RECTANGLE ?? 0) +
+    (probabilities.SQUARE_PLATE ?? 0) +
+    (probabilities.TWO_LINE_PLATE ?? 0) +
+    (probabilities.EV_WHITE_PLATE ?? 0) +
+    (probabilities.SLIGHT_ROTATION ?? 0);
   const correctable =
     (probabilities.LOW_CONTRAST ?? 0) +
     (probabilities.UNDEREXPOSED ?? 0) +
     (probabilities.OVEREXPOSED ?? 0) +
-    (probabilities.GLARE_REFLECTION ?? 0);
+    (probabilities.GLARE_REFLECTION ?? 0) +
+    (probabilities.PERSPECTIVE_DISTORTION ?? 0) +
+    (probabilities.BAD_ANGLE ?? 0);
   const hard =
     (probabilities.MOTION_BLUR ?? 0) +
     (probabilities.OUT_OF_FOCUS ?? 0) +
     (probabilities.TOO_SMALL ?? 0) +
-    (probabilities.OCCLUDED ?? 0) +
-    (probabilities.BAD_ANGLE ?? 0);
+    (probabilities.OCCLUDED ?? 0);
 
-  return clamp01(good * 0.96 + correctable * 0.50 + (1 - hard) * 0.18);
+  return clamp01(good * 0.86 + correctable * 0.52 + (1 - hard) * 0.16);
 }
 
 function buildRejectionReasons(
@@ -389,17 +451,29 @@ function buildRejectionReasons(
   if (measurements.cropWidth < 48 || measurements.cropHeight < 18) reasons.add('CROP_TOO_SMALL');
   if (measurements.sharpnessScore < 0.18) reasons.add('LOW_SHARPNESS');
   if (measurements.contrastScore < 0.18) reasons.add('LOW_CONTRAST');
-  if (measurements.clippingPercentage > 0.12) reasons.add('HIGHLIGHT_CLIPPING');
-  if (measurements.darkPixelRatio > 0.58) reasons.add('UNDEREXPOSED_CROP');
-  if (measurements.perspectiveScore < 0.45) reasons.add('BAD_PERSPECTIVE');
-  if (measurements.occlusionEstimate > 0.55) reasons.add('POSSIBLE_OCCLUSION');
+  if (measurements.clippingPercentage > 0.16) reasons.add('HIGHLIGHT_CLIPPING');
+  if (measurements.darkPixelRatio > 0.66) reasons.add('UNDEREXPOSED_CROP');
+  if (measurements.perspectiveScore < 0.36) reasons.add('BAD_PERSPECTIVE');
+  if (measurements.occlusionEstimate > 0.65) reasons.add('POSSIBLE_OCCLUSION');
   return Array.from(reasons);
 }
 
-function computePixelStats(canvas: HTMLCanvasElement): { clippingPercentage: number; darkPixelRatio: number } {
+function computePixelStats(canvas: HTMLCanvasElement): {
+  clippingPercentage: number;
+  darkPixelRatio: number;
+  brightPixelRatio: number;
+  edgeDensity: number;
+  whitePlateLikelihood: number;
+} {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx || canvas.width === 0 || canvas.height === 0) {
-    return { clippingPercentage: 1, darkPixelRatio: 1 };
+    return {
+      clippingPercentage: 1,
+      darkPixelRatio: 1,
+      brightPixelRatio: 0,
+      edgeDensity: 0,
+      whitePlateLikelihood: 0,
+    };
   }
 
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -407,24 +481,53 @@ function computePixelStats(canvas: HTMLCanvasElement): { clippingPercentage: num
   const total = Math.max(1, canvas.width * canvas.height);
   let clipped = 0;
   let dark = 0;
+  let bright = 0;
+  let edgeSamples = 0;
+  let strongEdges = 0;
 
+  const luma = new Float32Array(total);
   for (let i = 0; i < total; i++) {
     const offset = i * 4;
-    const luma = data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114;
-    if (luma >= 245) clipped++;
-    if (luma <= 32) dark++;
+    luma[i] = data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114;
+    if (luma[i] >= 245) clipped++;
+    if (luma[i] <= 32) dark++;
+    if (luma[i] >= 205) bright++;
   }
 
+  const step = Math.max(1, Math.floor(Math.max(canvas.width, canvas.height) / 120));
+  for (let y = step; y < canvas.height - step; y += step) {
+    for (let x = step; x < canvas.width - step; x += step) {
+      const idx = y * canvas.width + x;
+      const gx = Math.abs(luma[idx + step] - luma[idx - step]);
+      const gy = Math.abs(luma[idx + canvas.width * step] - luma[idx - canvas.width * step]);
+      if (gx + gy > 42) strongEdges++;
+      edgeSamples++;
+    }
+  }
+
+  const clippingPercentage = roundMetric(clipped / total);
+  const darkPixelRatio = roundMetric(dark / total);
+  const brightPixelRatio = roundMetric(bright / total);
+  const edgeDensity = roundMetric(strongEdges / Math.max(1, edgeSamples));
+  const whitePlateLikelihood = roundMetric(
+    brightPixelRatio * 0.68 +
+    Math.min(0.25, darkPixelRatio * 0.9) +
+    Math.min(0.20, edgeDensity * 0.6)
+  );
+
   return {
-    clippingPercentage: roundMetric(clipped / total),
-    darkPixelRatio: roundMetric(dark / total),
+    clippingPercentage,
+    darkPixelRatio,
+    brightPixelRatio,
+    edgeDensity,
+    whitePlateLikelihood,
   };
 }
 
 function getAspectRatioScore(aspectRatio: number): number {
   if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return 0;
-  if (aspectRatio >= 1.45 && aspectRatio <= 5.4) return 1;
-  if (aspectRatio >= 1.1 && aspectRatio <= 6.2) return 0.68;
+  if (aspectRatio >= 0.85 && aspectRatio <= 5.8) return 1;
+  if (aspectRatio >= 0.65 && aspectRatio <= 7.2) return 0.72;
   return 0.28;
 }
 

@@ -91,13 +91,13 @@ function getAdaptiveCropTargetSize(
   targetHeight: number
 ): { width: number; height: number } {
   const rawAspect = bbox.width / Math.max(1, bbox.height);
-  const aspect = Number.isFinite(rawAspect) ? clamp(rawAspect, 0.8, 6.5) : 3.3;
+  const aspect = Number.isFinite(rawAspect) ? clamp(rawAspect, 0.65, 7.2) : 3.3;
 
   if (aspect < 2.3) {
-    const width = aspect < 1.6 ? 256 : 320;
+    const width = aspect < 1.6 ? 288 : 336;
     return {
       width,
-      height: clamp(Math.round(width / aspect), 128, 260),
+      height: clamp(Math.round(width / aspect), 128, 320),
     };
   }
 
@@ -124,8 +124,8 @@ export function detectPlateCandidatesCV(
   if (!ctx) return [];
 
   const candidates: BoundingBox[] = [];
-  const plateAspectRatios = [4.5, 3.8, 3.2, 2.2, 1.6];
-  const scanScales = [0.12, 0.18, 0.25, 0.35, 0.45, 0.55];
+  const plateAspectRatios = [5.6, 4.7, 3.8, 3.2, 2.4, 1.8, 1.25, 0.95];
+  const scanScales = [0.08, 0.12, 0.18, 0.25, 0.35, 0.45, 0.55];
 
   for (const scale of scanScales) {
     const plateW = Math.round(W * scale);
@@ -204,7 +204,7 @@ function mergeAdjacentBoxes(boxes: BoundingBox[]): BoundingBox[] {
           
           // Verify aspect ratio of merged box is still realistic for a plate (0.8 to 6.5)
           const mergedAR = newW / Math.max(1, newH);
-          if (mergedAR >= 0.8 && mergedAR <= 6.5) {
+          if (mergedAR >= 0.65 && mergedAR <= 7.2) {
             cur = {
               x: newX,
               y: newY,
@@ -361,6 +361,7 @@ export function generateAdaptiveCrops(
 
   const variants: PreprocessVariant[] = variantsOverride ?? [
     'ORIGINAL',
+    'PERSPECTIVE',
     'GRAYSCALE',
     'DEFAULT_CONTRAST',
     'INVERTED',
@@ -368,6 +369,8 @@ export function generateAdaptiveCrops(
     'SHARPEN',
     'DARK_BG',
     'NOISE_REDUCED',
+    'GAMMA_BRIGHTEN',
+    'HIGHLIGHT_REDUCED',
   ];
 
   for (const variant of variants) {
@@ -432,6 +435,10 @@ export function preprocessCropVariant(
   variant: PreprocessVariant
 ): void {
   if (variant === 'ORIGINAL') return;
+  if (variant === 'PERSPECTIVE') {
+    applyPerspectiveRectification(ctx, width, height);
+    return;
+  }
 
   const imgData = ctx.getImageData(0, 0, width, height);
   const data = imgData.data;
@@ -512,9 +519,6 @@ export function preprocessCropVariant(
       const v = Math.round(clamp(compressed * 1.08, 0, 1) * 255);
       data[i] = data[i + 1] = data[i + 2] = v;
     }
-  } else if (variant === 'PERSPECTIVE') {
-    // Placeholder hook for future corner-based rectification. With only an axis-aligned
-    // detector box available, keep the crop geometry unchanged.
   }
 
   ctx.putImageData(imgData, 0, 0);
@@ -543,19 +547,350 @@ function applySharpenKernel(ctx: CanvasRenderingContext2D, width: number, height
   ctx.putImageData(imgData, 0, 0);
 }
 
+interface Point2D {
+  x: number;
+  y: number;
+}
+
+interface WeightedPoint2D extends Point2D {
+  weight: number;
+}
+
+interface Line2D {
+  slope: number;
+  intercept: number;
+}
+
+function applyPerspectiveRectification(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  if (width < 32 || height < 16) return;
+
+  const source = ctx.getImageData(0, 0, width, height);
+  const quad = estimateReadablePlateQuad(source, width, height);
+  if (!quad) return;
+
+  const homography = computeHomography(
+    [
+      { x: 0, y: 0 },
+      { x: width - 1, y: 0 },
+      { x: width - 1, y: height - 1 },
+      { x: 0, y: height - 1 },
+    ],
+    quad
+  );
+  if (!homography) return;
+
+  const output = ctx.createImageData(width, height);
+  const src = source.data;
+  const dst = output.data;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const denom = homography[6] * x + homography[7] * y + 1;
+      if (Math.abs(denom) < 1e-6) continue;
+
+      const sx = (homography[0] * x + homography[1] * y + homography[2]) / denom;
+      const sy = (homography[3] * x + homography[4] * y + homography[5]) / denom;
+      const outIdx = (y * width + x) * 4;
+
+      sampleBilinear(src, width, height, sx, sy, dst, outIdx);
+    }
+  }
+
+  ctx.putImageData(output, 0, 0);
+}
+
+function estimateReadablePlateQuad(
+  image: ImageData,
+  width: number,
+  height: number
+): [Point2D, Point2D, Point2D, Point2D] | null {
+  const luma = new Float32Array(width * height);
+  const data = image.data;
+
+  for (let i = 0; i < width * height; i++) {
+    const offset = i * 4;
+    luma[i] = data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114;
+  }
+
+  const sampleStep = Math.max(1, Math.floor(Math.max(width, height) / 180));
+  const marginX = Math.max(2, Math.round(width * 0.03));
+  const marginY = Math.max(2, Math.round(height * 0.04));
+  let edgeSum = 0;
+  let edgeSqSum = 0;
+  let edgeCount = 0;
+
+  for (let y = marginY + sampleStep; y < height - marginY - sampleStep; y += sampleStep) {
+    for (let x = marginX + sampleStep; x < width - marginX - sampleStep; x += sampleStep) {
+      const idx = y * width + x;
+      const gx = Math.abs(luma[idx + sampleStep] - luma[idx - sampleStep]);
+      const gy = Math.abs(luma[idx + width * sampleStep] - luma[idx - width * sampleStep]);
+      const edge = gx + gy;
+      edgeSum += edge;
+      edgeSqSum += edge * edge;
+      edgeCount++;
+    }
+  }
+
+  if (edgeCount < 12) return null;
+  const edgeMean = edgeSum / edgeCount;
+  const edgeStd = Math.sqrt(Math.max(0, edgeSqSum / edgeCount - edgeMean * edgeMean));
+  const threshold = Math.max(26, edgeMean + edgeStd * 0.65);
+  const points: WeightedPoint2D[] = [];
+  const xValues: number[] = [];
+
+  for (let y = marginY + sampleStep; y < height - marginY - sampleStep; y += sampleStep) {
+    for (let x = marginX + sampleStep; x < width - marginX - sampleStep; x += sampleStep) {
+      const idx = y * width + x;
+      const gx = Math.abs(luma[idx + sampleStep] - luma[idx - sampleStep]);
+      const gy = Math.abs(luma[idx + width * sampleStep] - luma[idx - width * sampleStep]);
+      const edge = gx + gy;
+      if (edge < threshold) continue;
+      points.push({ x, y, weight: edge });
+      xValues.push(x);
+    }
+  }
+
+  if (points.length < 18 || xValues.length < 18) return null;
+
+  xValues.sort((a, b) => a - b);
+  const xSpread = xValues[xValues.length - 1] - xValues[0];
+  if (xSpread < width * 0.32) return null;
+
+  const leftX = clamp(quantileSorted(xValues, 0.03) - width * 0.06, 0, width - 2);
+  const rightX = clamp(quantileSorted(xValues, 0.97) + width * 0.06, leftX + 2, width - 1);
+  const bins = buildVerticalEdgeBins(points, leftX, rightX, 18);
+  if (bins.top.length < 5 || bins.bottom.length < 5) return null;
+
+  const topLine = fitWeightedLine(bins.top);
+  const bottomLine = fitWeightedLine(bins.bottom);
+  if (!topLine || !bottomLine) return null;
+
+  const aspect = width / Math.max(1, height);
+  const verticalMarginRatio = aspect < 2.3 ? 0.08 : 0.14;
+  const minBandHeight = height * (aspect < 2.3 ? 0.38 : 0.22);
+
+  let topLeftY = evaluateLine(topLine, leftX);
+  let topRightY = evaluateLine(topLine, rightX);
+  let bottomLeftY = evaluateLine(bottomLine, leftX);
+  let bottomRightY = evaluateLine(bottomLine, rightX);
+
+  const leftBand = bottomLeftY - topLeftY;
+  const rightBand = bottomRightY - topRightY;
+  if (leftBand < minBandHeight || rightBand < minBandHeight) {
+    return null;
+  }
+
+  const leftMargin = leftBand * verticalMarginRatio;
+  const rightMargin = rightBand * verticalMarginRatio;
+  topLeftY = clamp(topLeftY - leftMargin, 0, height - 2);
+  bottomLeftY = clamp(bottomLeftY + leftMargin, topLeftY + 2, height - 1);
+  topRightY = clamp(topRightY - rightMargin, 0, height - 2);
+  bottomRightY = clamp(bottomRightY + rightMargin, topRightY + 2, height - 1);
+
+  const maxSlope = Math.max(
+    Math.abs(topRightY - topLeftY) / Math.max(1, rightX - leftX),
+    Math.abs(bottomRightY - bottomLeftY) / Math.max(1, rightX - leftX)
+  );
+  const heightRatio = Math.max(leftBand, rightBand) / Math.max(1, Math.min(leftBand, rightBand));
+  if (maxSlope > 0.45 || heightRatio > 2.7) return null;
+
+  return [
+    { x: leftX, y: topLeftY },
+    { x: rightX, y: topRightY },
+    { x: rightX, y: bottomRightY },
+    { x: leftX, y: bottomLeftY },
+  ];
+}
+
+function buildVerticalEdgeBins(
+  points: WeightedPoint2D[],
+  leftX: number,
+  rightX: number,
+  binCount: number
+): { top: WeightedPoint2D[]; bottom: WeightedPoint2D[] } {
+  const buckets: { x: number; ys: number[]; weight: number }[] = Array.from({ length: binCount }, (_, index) => ({
+    x: leftX + ((rightX - leftX) * (index + 0.5)) / binCount,
+    ys: [],
+    weight: 0,
+  }));
+
+  for (const point of points) {
+    if (point.x < leftX || point.x > rightX) continue;
+    const bucketIndex = clamp(
+      Math.floor(((point.x - leftX) / Math.max(1, rightX - leftX)) * binCount),
+      0,
+      binCount - 1
+    );
+    buckets[bucketIndex].ys.push(point.y);
+    buckets[bucketIndex].weight += point.weight;
+  }
+
+  const top: WeightedPoint2D[] = [];
+  const bottom: WeightedPoint2D[] = [];
+
+  for (const bucket of buckets) {
+    if (bucket.ys.length < 2) continue;
+    bucket.ys.sort((a, b) => a - b);
+    const topY = quantileSorted(bucket.ys, 0.12);
+    const bottomY = quantileSorted(bucket.ys, 0.88);
+    if (bottomY - topY < 4) continue;
+    const weight = Math.max(1, bucket.weight / bucket.ys.length);
+    top.push({ x: bucket.x, y: topY, weight });
+    bottom.push({ x: bucket.x, y: bottomY, weight });
+  }
+
+  return { top, bottom };
+}
+
+function fitWeightedLine(points: WeightedPoint2D[]): Line2D | null {
+  if (points.length < 2) return null;
+
+  let weightSum = 0;
+  let meanX = 0;
+  let meanY = 0;
+
+  for (const point of points) {
+    weightSum += point.weight;
+    meanX += point.x * point.weight;
+    meanY += point.y * point.weight;
+  }
+  if (weightSum <= 0) return null;
+
+  meanX /= weightSum;
+  meanY /= weightSum;
+
+  let covXX = 0;
+  let covXY = 0;
+  for (const point of points) {
+    const dx = point.x - meanX;
+    covXX += dx * dx * point.weight;
+    covXY += dx * (point.y - meanY) * point.weight;
+  }
+
+  const slope = Math.abs(covXX) < 1e-6 ? 0 : covXY / covXX;
+  return {
+    slope,
+    intercept: meanY - slope * meanX,
+  };
+}
+
+function evaluateLine(line: Line2D, x: number): number {
+  return line.slope * x + line.intercept;
+}
+
+function quantileSorted(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const idx = clamp((values.length - 1) * q, 0, values.length - 1);
+  const lower = Math.floor(idx);
+  const upper = Math.ceil(idx);
+  if (lower === upper) return values[lower];
+  const t = idx - lower;
+  return values[lower] * (1 - t) + values[upper] * t;
+}
+
+function computeHomography(
+  source: [Point2D, Point2D, Point2D, Point2D],
+  destination: [Point2D, Point2D, Point2D, Point2D]
+): number[] | null {
+  const matrix: number[][] = [];
+
+  for (let i = 0; i < 4; i++) {
+    const src = source[i];
+    const dst = destination[i];
+    matrix.push([src.x, src.y, 1, 0, 0, 0, -src.x * dst.x, -src.y * dst.x, dst.x]);
+    matrix.push([0, 0, 0, src.x, src.y, 1, -src.x * dst.y, -src.y * dst.y, dst.y]);
+  }
+
+  const solved = solveLinearSystem(matrix);
+  return solved ? [...solved, 1] : null;
+}
+
+function solveLinearSystem(matrix: number[][]): number[] | null {
+  const n = 8;
+
+  for (let col = 0; col < n; col++) {
+    let pivotRow = col;
+    for (let row = col + 1; row < n; row++) {
+      if (Math.abs(matrix[row][col]) > Math.abs(matrix[pivotRow][col])) {
+        pivotRow = row;
+      }
+    }
+
+    if (Math.abs(matrix[pivotRow][col]) < 1e-8) return null;
+    if (pivotRow !== col) {
+      const temp = matrix[col];
+      matrix[col] = matrix[pivotRow];
+      matrix[pivotRow] = temp;
+    }
+
+    const pivot = matrix[col][col];
+    for (let i = col; i <= n; i++) matrix[col][i] /= pivot;
+
+    for (let row = 0; row < n; row++) {
+      if (row === col) continue;
+      const factor = matrix[row][col];
+      for (let i = col; i <= n; i++) {
+        matrix[row][i] -= factor * matrix[col][i];
+      }
+    }
+  }
+
+  return matrix.map((row) => row[n]);
+}
+
+function sampleBilinear(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  dst: Uint8ClampedArray,
+  dstOffset: number
+): void {
+  if (x < 0 || y < 0 || x > width - 1 || y > height - 1) {
+    dst[dstOffset] = 0;
+    dst[dstOffset + 1] = 0;
+    dst[dstOffset + 2] = 0;
+    dst[dstOffset + 3] = 255;
+    return;
+  }
+
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  const idx00 = (y0 * width + x0) * 4;
+  const idx10 = (y0 * width + x1) * 4;
+  const idx01 = (y1 * width + x0) * 4;
+  const idx11 = (y1 * width + x1) * 4;
+
+  for (let channel = 0; channel < 4; channel++) {
+    const top = src[idx00 + channel] * (1 - tx) + src[idx10 + channel] * tx;
+    const bottom = src[idx01 + channel] * (1 - tx) + src[idx11 + channel] * tx;
+    dst[dstOffset + channel] = Math.round(top * (1 - ty) + bottom * ty);
+  }
+  dst[dstOffset + 3] = 255;
+}
+
 export function splitTwoLineCrop(
   sourceCanvas: HTMLCanvasElement
 ): { top: HTMLCanvasElement; bottom: HTMLCanvasElement } {
   const W = sourceCanvas.width;
   const H = sourceCanvas.height;
-  const halfH = Math.round(H * 0.52);
+  const splitY = estimateTwoLineSplitY(sourceCanvas);
+  const overlap = Math.max(2, Math.round(H * 0.06));
+  const topSourceH = clamp(splitY + overlap, 1, H);
+  const bottomSourceY = clamp(splitY - overlap, 0, H - 1);
+  const bottomSourceH = Math.max(1, H - bottomSourceY);
 
   const top = document.createElement('canvas');
   top.width = W;
   top.height = Math.round(H * 0.55);
   const topCtx = top.getContext('2d', { willReadFrequently: true });
   if (topCtx) {
-    topCtx.drawImage(sourceCanvas, 0, 0, W, halfH, 0, 0, W, top.height);
+    topCtx.drawImage(sourceCanvas, 0, 0, W, topSourceH, 0, 0, W, top.height);
   }
 
   const bottom = document.createElement('canvas');
@@ -563,10 +898,63 @@ export function splitTwoLineCrop(
   bottom.height = Math.round(H * 0.55);
   const botCtx = bottom.getContext('2d', { willReadFrequently: true });
   if (botCtx) {
-    botCtx.drawImage(sourceCanvas, 0, Math.round(H * 0.45), W, Math.round(H * 0.55), 0, 0, W, bottom.height);
+    botCtx.drawImage(sourceCanvas, 0, bottomSourceY, W, bottomSourceH, 0, 0, W, bottom.height);
   }
 
   return { top, bottom };
+}
+
+function estimateTwoLineSplitY(sourceCanvas: HTMLCanvasElement): number {
+  const W = sourceCanvas.width;
+  const H = sourceCanvas.height;
+  const fallback = Math.round(H * 0.52);
+  if (W < 16 || H < 32) return fallback;
+
+  const ctx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return fallback;
+
+  try {
+    const image = ctx.getImageData(0, 0, W, H);
+    const { data } = image;
+    const rowEnergy = new Float32Array(H);
+
+    for (let y = 1; y < H - 1; y++) {
+      let energy = 0;
+      for (let x = 1; x < W - 1; x++) {
+        const idx = (y * W + x) * 4;
+        const left = data[idx - 4] * 0.299 + data[idx - 3] * 0.587 + data[idx - 2] * 0.114;
+        const right = data[idx + 4] * 0.299 + data[idx + 5] * 0.587 + data[idx + 6] * 0.114;
+        const up = data[idx - W * 4] * 0.299 + data[idx - W * 4 + 1] * 0.587 + data[idx - W * 4 + 2] * 0.114;
+        const down = data[idx + W * 4] * 0.299 + data[idx + W * 4 + 1] * 0.587 + data[idx + W * 4 + 2] * 0.114;
+        energy += Math.abs(right - left) + Math.abs(down - up);
+      }
+      rowEnergy[y] = energy / Math.max(1, W - 2);
+    }
+
+    const minY = Math.round(H * 0.34);
+    const maxY = Math.round(H * 0.66);
+    let bestY = fallback;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (let y = minY; y <= maxY; y++) {
+      const localEnergy =
+        rowEnergy[y - 2] * 0.2 +
+        rowEnergy[y - 1] * 0.4 +
+        rowEnergy[y] +
+        rowEnergy[y + 1] * 0.4 +
+        rowEnergy[y + 2] * 0.2;
+      const centrePenalty = Math.abs(y - fallback) / H;
+      const score = localEnergy + centrePenalty * 12;
+      if (score < bestScore) {
+        bestScore = score;
+        bestY = y;
+      }
+    }
+
+    return bestY;
+  } catch {
+    return fallback;
+  }
 }
 
 export function calculateCropQualityScore(

@@ -6,6 +6,12 @@ The plate quality model is a YOLOv8 classification model that decides whether a 
 
 ```text
 GOOD
+STANDARD_RECTANGLE
+SQUARE_PLATE
+TWO_LINE_PLATE
+EV_WHITE_PLATE
+SLIGHT_ROTATION
+PERSPECTIVE_DISTORTION
 MOTION_BLUR
 OUT_OF_FOCUS
 TOO_SMALL
@@ -91,6 +97,12 @@ The runtime supports this sidecar format:
   },
   "classes": [
     "GOOD",
+    "STANDARD_RECTANGLE",
+    "SQUARE_PLATE",
+    "TWO_LINE_PLATE",
+    "EV_WHITE_PLATE",
+    "SLIGHT_ROTATION",
+    "PERSPECTIVE_DISTORTION",
     "MOTION_BLUR",
     "OUT_OF_FOCUS",
     "TOO_SMALL",
@@ -106,12 +118,18 @@ The runtime supports this sidecar format:
 
 ## Recommended Labeling Rules
 
-Use `GOOD` for crisp, readable crops with strong contrast.
+Use `GOOD` for crisp, readable crops when no more specific readable-layout label applies. Prefer the readable-layout labels below when they are known; they should pass OCR and help the model learn Malaysian plate diversity.
 
-Use failure labels for the dominant reason OCR should be delayed or skipped:
+Use failure labels for the dominant reason OCR should be delayed, corrected, or skipped:
 
 | Class | Meaning |
 | --- | --- |
+| `STANDARD_RECTANGLE` | Readable standard black plate or commercial plate in a normal single-line rectangle |
+| `SQUARE_PLATE` | Readable square or near-square rear/motorcycle plate |
+| `TWO_LINE_PLATE` | Readable two-line crop where prefix and number may be stacked |
+| `EV_WHITE_PLATE` | Readable JPJePlate/EV-style white reflective background with black characters |
+| `SLIGHT_ROTATION` | Readable plate with mild roll/tilt that perspective preprocessing can correct |
+| `PERSPECTIVE_DISTORTION` | Readable or near-readable trapezoid/side-angle crop that should be rectified before OCR |
 | `MOTION_BLUR` | Directional streaking from movement |
 | `OUT_OF_FOCUS` | Defocused crop |
 | `TOO_SMALL` | Plate text is too small for reliable OCR |
@@ -120,4 +138,4 @@ Use failure labels for the dominant reason OCR should be delayed or skipped:
 | `UNDEREXPOSED` | Plate is too dark |
 | `GLARE_REFLECTION` | Glare or reflected light across text |
 | `OCCLUDED` | Plate partly hidden |
-| `BAD_ANGLE` | Severe skew or perspective distortion |
+| `BAD_ANGLE` | Severe skew or perspective distortion; label only when correction is unlikely to recover text |

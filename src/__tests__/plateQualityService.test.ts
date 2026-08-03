@@ -93,6 +93,12 @@ describe('PlateQualityService', () => {
       confidence: 0.86,
       probabilities: {
         GOOD: 0.86,
+        STANDARD_RECTANGLE: 0,
+        SQUARE_PLATE: 0,
+        TWO_LINE_PLATE: 0,
+        EV_WHITE_PLATE: 0,
+        SLIGHT_ROTATION: 0,
+        PERSPECTIVE_DISTORTION: 0,
         MOTION_BLUR: 0.01,
         OUT_OF_FOCUS: 0.01,
         TOO_SMALL: 0.01,
@@ -110,6 +116,25 @@ describe('PlateQualityService', () => {
     expect(decision.acceptableForOCR).toBe(true);
     expect(decision.qualityScore).toBeGreaterThan(0.65);
     expect(decision.rejectionReasons).toEqual([]);
+  });
+
+  it('accepts readable Malaysian layout classes for OCR', () => {
+    for (const primaryClass of ['STANDARD_RECTANGLE', 'SQUARE_PLATE', 'TWO_LINE_PLATE', 'EV_WHITE_PLATE', 'SLIGHT_ROTATION'] as const) {
+      const decision = scorePlateQuality({
+        primaryClass,
+        confidence: 0.78,
+        probabilities: { ...zeroProbabilities(), [primaryClass]: 0.78, GOOD: 0.10 },
+        measurements: {
+          ...goodMeasurements(),
+          aspectRatio: primaryClass === 'SQUARE_PLATE' ? 1.2 : primaryClass === 'TWO_LINE_PLATE' ? 1.9 : 4.7,
+          whitePlateLikelihood: primaryClass === 'EV_WHITE_PLATE' ? 0.72 : 0.12,
+          perspectiveScore: primaryClass === 'SLIGHT_ROTATION' ? 0.58 : 0.92,
+        },
+        minQualityScore: 0.35,
+      });
+
+      expect(decision.acceptableForOCR).toBe(true);
+    }
   });
 
   it('gates OCR and waits for a better crop on hard rejection classes', () => {
@@ -232,11 +257,15 @@ function goodMeasurements() {
     detectorConfidence: 0.9,
     cropWidth: 180,
     cropHeight: 52,
+    aspectRatio: 180 / 52,
     sharpnessScore: 0.8,
     contrastScore: 0.72,
     brightnessScore: 0.76,
     clippingPercentage: 0.01,
     darkPixelRatio: 0.08,
+    brightPixelRatio: 0.12,
+    edgeDensity: 0.18,
+    whitePlateLikelihood: 0.12,
     perspectiveScore: 0.92,
     occlusionEstimate: 0.05,
     trackStability: 0.88,
@@ -249,6 +278,12 @@ function goodMeasurements() {
 function zeroProbabilities(): Record<string, number> {
   return {
     GOOD: 0,
+    STANDARD_RECTANGLE: 0,
+    SQUARE_PLATE: 0,
+    TWO_LINE_PLATE: 0,
+    EV_WHITE_PLATE: 0,
+    SLIGHT_ROTATION: 0,
+    PERSPECTIVE_DISTORTION: 0,
     MOTION_BLUR: 0,
     OUT_OF_FOCUS: 0,
     TOO_SMALL: 0,
