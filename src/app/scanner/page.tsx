@@ -1177,9 +1177,9 @@ function getSeenPlateStatusLabel(tone: SeenPlateTone, language: string): string 
 }
 
 function getSeenPlateBorderClass(tone: SeenPlateTone): string {
-  if (tone === 'EXACT') return 'border-red-700 bg-red-950/45';
-  if (tone === 'POSSIBLE') return 'border-amber-700 bg-amber-950/35';
-  if (tone === 'NONE') return 'border-slate-800 bg-slate-900/90';
+  if (tone === 'EXACT') return 'border-red-800/70 bg-red-950/25';
+  if (tone === 'POSSIBLE') return 'border-amber-800/70 bg-amber-950/20';
+  if (tone === 'NONE') return 'border-slate-800 bg-slate-900/80';
   if (tone === 'CHECKING') return 'border-cyan-800 bg-cyan-950/25';
   return 'border-slate-800 bg-slate-950/80';
 }
@@ -1187,7 +1187,7 @@ function getSeenPlateBorderClass(tone: SeenPlateTone): string {
 function getSeenPlateBadgeClass(tone: SeenPlateTone): string {
   if (tone === 'EXACT') return 'bg-red-600 text-white';
   if (tone === 'POSSIBLE') return 'bg-amber-500 text-slate-950';
-  if (tone === 'NONE') return 'border border-slate-700 bg-slate-950 text-slate-300';
+  if (tone === 'NONE') return 'bg-slate-800/90 text-slate-300';
   if (tone === 'CHECKING') return 'border border-cyan-700 bg-cyan-950 text-cyan-200';
   return 'border border-slate-700 bg-slate-950 text-slate-300';
 }
@@ -4505,12 +4505,6 @@ export default function ScannerPage() {
       };
     });
   const seenPlateItems = [...activeSeenPlateItems, ...recentSeenPlateItems].slice(0, 8);
-  const seenPlateSummaryTone =
-    seenPlateItems.find((item) => item.tone === 'EXACT')?.tone ||
-    seenPlateItems.find((item) => item.tone === 'POSSIBLE')?.tone ||
-    seenPlateItems.find((item) => item.tone === 'CHECKING')?.tone ||
-    seenPlateItems[0]?.tone ||
-    null;
   const scannerCameraStyle = {
     '--scanner-camera-zoom': mobileCameraZoom.toFixed(2),
   } as React.CSSProperties;
@@ -4647,9 +4641,9 @@ export default function ScannerPage() {
             {isScanning ? (
               <button
                 onClick={handleStopScanning}
-                className="px-4 py-3 sm:py-2 rounded-xl bg-red-950 text-red-200 border border-red-700 text-xs font-black uppercase flex items-center justify-center gap-2"
+                className="px-4 py-3 sm:py-2 rounded-xl border border-slate-700 bg-slate-900 text-slate-200 text-xs font-black uppercase flex items-center justify-center gap-2 hover:border-red-800 hover:text-red-200"
               >
-                <XCircle className="w-4 h-4" />
+                <span className="h-2.5 w-2.5 rounded-sm bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.45)]" />
                 <span>{language === 'BM' ? 'Henti Imbasan' : 'Stop Scan'}</span>
               </button>
             ) : (
@@ -5084,54 +5078,39 @@ export default function ScannerPage() {
           })}
         </div>
 
-        <div className="absolute inset-x-3 top-3 z-20 flex items-center justify-between gap-2 sm:hidden">
+        <div className="absolute inset-x-3 top-3 z-20 flex items-start justify-between gap-2 sm:hidden">
           <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2 backdrop-blur-md">
             <div className="truncate text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
               {language === 'BM' ? 'Pengimbas' : 'Scanner'}
             </div>
             <div className="truncate text-[11px] font-bold text-slate-200">{simpleScannerStatus}</div>
           </div>
-          <div
-            className="flex shrink-0 items-center gap-1 rounded-xl border border-slate-700 bg-slate-950/80 p-1 backdrop-blur-md"
-            title={language === 'BM' ? 'Pilih kamera telefon' : 'Choose phone camera'}
-          >
-            <SwitchCamera className="h-3.5 w-3.5 text-cyan-300" />
-            {[
-              { id: 'environment' as const, label: language === 'BM' ? 'Belakang' : 'Back' },
-              { id: 'user' as const, label: language === 'BM' ? 'Depan' : 'Front' },
-            ].map((option) => {
-              const active = mobileFacingMode === option.id;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleMobileFacingModeChange(option.id);
-                  }}
-                  className={`h-8 rounded-lg px-2 text-[10px] font-black transition-all ${
-                    active
-                      ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20'
-                      : 'text-slate-300 hover:bg-slate-800/80'
-                  }`}
-                  aria-pressed={active}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleMobileFacingModeChange(mobileFacingMode === 'environment' ? 'user' : 'environment');
+              }}
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-700/80 bg-slate-950/75 text-cyan-200 shadow-lg shadow-slate-950/35 backdrop-blur-md transition-all hover:border-cyan-700 hover:text-cyan-100"
+              title={language === 'BM' ? 'Tukar kamera' : 'Flip camera'}
+              aria-label={language === 'BM' ? 'Tukar kamera' : 'Flip camera'}
+            >
+              <SwitchCamera className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setSoundEnabled(!soundEnabled)}
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-xs font-bold shadow-lg shadow-slate-950/35 backdrop-blur-md transition-all ${
+                soundEnabled
+                  ? 'border-cyan-800/80 bg-slate-950/75 text-cyan-300'
+                  : 'border-slate-700/80 bg-slate-950/75 text-slate-400'
+              }`}
+              title="Toggle sound"
+              aria-label="Toggle sound"
+            >
+              {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </button>
           </div>
-          <button
-            onClick={() => setSoundEnabled(!soundEnabled)}
-            className={`h-10 w-10 rounded-xl border text-xs font-bold transition-all shrink-0 backdrop-blur-md ${
-              soundEnabled
-                ? 'bg-cyan-950/90 text-cyan-300 border-cyan-700'
-                : 'bg-slate-950/80 text-slate-400 border-slate-700'
-            }`}
-            title="Toggle sound"
-          >
-            {soundEnabled ? <Volume2 className="mx-auto h-4 w-4" /> : <VolumeX className="mx-auto h-4 w-4" />}
-          </button>
         </div>
 
         <div className="absolute inset-x-3 bottom-3 z-20 sm:hidden">
@@ -5143,9 +5122,9 @@ export default function ScannerPage() {
           {isScanning ? (
             <button
               onClick={handleStopScanning}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-red-700 bg-red-950/90 text-xs font-black uppercase tracking-wider text-red-100 shadow-xl backdrop-blur-md"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-700/90 bg-slate-950/82 text-xs font-black uppercase tracking-wider text-slate-100 shadow-xl shadow-slate-950/35 backdrop-blur-md transition-all active:scale-[0.99]"
             >
-              <XCircle className="h-4 w-4" />
+              <span className="h-3 w-3 rounded-sm bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.55)]" />
               <span>{language === 'BM' ? 'Henti Imbasan' : 'Stop Scan'}</span>
             </button>
           ) : (
@@ -5161,15 +5140,7 @@ export default function ScannerPage() {
       </div>
 
       <div
-        className={`scanner-mobile-result sm:hidden rounded-2xl border p-3 shadow-xl ${
-          seenPlateSummaryTone === 'EXACT'
-            ? 'border-red-700 bg-red-950/45'
-            : seenPlateSummaryTone === 'POSSIBLE'
-            ? 'border-amber-700 bg-amber-950/35'
-            : seenPlateSummaryTone === 'CHECKING'
-            ? 'border-cyan-800 bg-cyan-950/25'
-            : 'border-slate-800 bg-slate-900/90'
-        }`}
+        className="scanner-mobile-result sm:hidden rounded-2xl border border-slate-800 bg-slate-900/90 p-3 shadow-xl shadow-slate-950/30"
       >
         {seenPlateItems.length > 0 ? (
           <div>
@@ -5197,7 +5168,7 @@ export default function ScannerPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="truncate font-mono text-lg font-black leading-none text-cyan-300">
+                        <span className="truncate font-mono text-xl font-black leading-none text-cyan-300">
                           {item.plate}
                         </span>
                         <span
@@ -5392,7 +5363,7 @@ export default function ScannerPage() {
                 className={`rounded-lg border px-3 py-2 transition-all hover:border-cyan-700 ${getSeenPlateBorderClass(item.tone)}`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-sm font-black text-cyan-300">{item.plate}</span>
+                  <span className="truncate font-mono text-base font-black text-cyan-300">{item.plate}</span>
                   <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-black uppercase ${getSeenPlateBadgeClass(item.tone)}`}>
                     {getSeenPlateStatusLabel(item.tone, language)}
                   </span>

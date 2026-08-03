@@ -1,4 +1,10 @@
 import { PlateCategory, PlateLayout } from '../db/types';
+import {
+  getSpecialSeriesPrefixPatternSource,
+  isConfiguredSpecialSeriesCandidate,
+  isFutureSpecialSeriesCandidate,
+  DEFAULT_SPECIAL_SERIES_PREFIXES,
+} from './specialSeries';
 
 export interface PlatePatternDefinition {
   id: string;
@@ -31,14 +37,9 @@ export const SARAWAK_PREFIXES = ['QA', 'QB', 'QC', 'QD', 'QK', 'QL', 'QP', 'QR',
 /**
  * Recognized special/commemorative registration series
  */
-export const SPECIAL_SERIES_PREFIXES = [
-  'PATRIOT', 'PROTON', 'PERODUA', 'PETRA', 'MADANI', 'MALAYSIA', 'BAMBEE', 'G1M',
-  'VIP', 'PERFECT', 'RIMAU', 'NAVY', 'AIRFORCE', 'SUKMA', 'JAGUH', 'NAAM', 'A1M',
-  'M1M', 'RAPID', 'GTR', 'GT', 'YY', 'UU', 'UG', 'UPM', 'UTM', 'UKM', 'USM', 'UUM',
-  'UIM', 'UITM', 'UMT', 'UMP', 'UIA', 'IIUM', 'XXVIASEAN', 'ASEAN',
-];
+export const SPECIAL_SERIES_PREFIXES = [...DEFAULT_SPECIAL_SERIES_PREFIXES];
 
-const SPECIAL_SERIES_REGEX = new RegExp(`^(${SPECIAL_SERIES_PREFIXES.join('|')})${SHORT_NUMBER}${LETTERS}?$`);
+const SPECIAL_SERIES_REGEX = new RegExp(`^(${getSpecialSeriesPrefixPatternSource()})${SHORT_NUMBER}${LETTERS}?$`);
 
 /**
  * Configurable Malaysian Plate Pattern Registry.
@@ -191,7 +192,7 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
   {
     id: 'SPECIAL_SERIES',
     category: 'SPECIAL_SERIES',
-    description: 'Special & Commemorative Approved Series (e.g. MADANI123, PATRIOT1)',
+    description: 'Configurable special, premium & commemorative series (e.g. MADANI123, GOLD1, FF99)',
     regex: SPECIAL_SERIES_REGEX,
     minLen: 3,
     maxLen: 15,
@@ -199,7 +200,19 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     isStrict: false,
   },
 
-  // 11. Standard Peninsular Letter-Number Sequences (A1, A1234, ABC1234, VAB1234)
+  // 11. Future JPJ special releases with longer word-like prefixes
+  {
+    id: 'FUTURE_SPECIAL_SERIES',
+    category: 'SPECIAL_SERIES',
+    description: 'Future configurable JPJ special series fallback (4-12 letters + 1-5 digits)',
+    regex: /^[A-Z]{4,12}[0-9]{1,5}[A-Z]?$/,
+    minLen: 5,
+    maxLen: 17,
+    priority: 62,
+    isStrict: false,
+  },
+
+  // 12. Standard Peninsular Letter-Number Sequences (A1, A1234, ABC1234, VAB1234)
   {
     id: 'STANDARD_PENINSULAR',
     category: 'STANDARD',
@@ -211,7 +224,7 @@ export const MALAYSIAN_PATTERNS: PlatePatternDefinition[] = [
     isStrict: false,
   },
 
-  // 12. Generic Valid Malaysian Candidate Fallback
+  // 13. Generic Valid Malaysian Candidate Fallback
   {
     id: 'GENERIC_MALAYSIAN',
     category: 'UNKNOWN_VALID_CANDIDATE',
@@ -246,7 +259,40 @@ export function validateMalaysianPattern(normalizedPlate: string): PatternValida
     };
   }
 
+  if (isConfiguredSpecialSeriesCandidate(normalizedPlate) && !/^PUTRAJAYA[0-9]/.test(normalizedPlate)) {
+    const pattern = MALAYSIAN_PATTERNS.find((item) => item.id === 'SPECIAL_SERIES');
+    if (pattern) {
+      return {
+        isValid: true,
+        pattern,
+        category: pattern.category,
+        score: Math.min(1.0, pattern.priority / 100),
+        hasTrailingSuffix: /[A-Z]$/.test(normalizedPlate) && /[0-9]/.test(normalizedPlate),
+      };
+    }
+  }
+
   for (const pattern of MALAYSIAN_PATTERNS) {
+    if (pattern.id === 'SPECIAL_SERIES' && isConfiguredSpecialSeriesCandidate(normalizedPlate)) {
+      return {
+        isValid: true,
+        pattern,
+        category: pattern.category,
+        score: Math.min(1.0, pattern.priority / 100),
+        hasTrailingSuffix: /[A-Z]$/.test(normalizedPlate) && /[0-9]/.test(normalizedPlate),
+      };
+    }
+
+    if (pattern.id === 'FUTURE_SPECIAL_SERIES' && isFutureSpecialSeriesCandidate(normalizedPlate)) {
+      return {
+        isValid: true,
+        pattern,
+        category: pattern.category,
+        score: Math.min(1.0, pattern.priority / 100),
+        hasTrailingSuffix: /[A-Z]$/.test(normalizedPlate) && /[0-9]/.test(normalizedPlate),
+      };
+    }
+
     if (pattern.regex.test(normalizedPlate)) {
       // Calculate score based on priority and strictness
       const baseScore = Math.min(1.0, pattern.priority / 100);

@@ -6,6 +6,7 @@ import {
   isRepeatedCharacterOmission,
 } from './normaliser';
 import { validateMalaysianPattern } from './patterns';
+import { correctMalaysianPlateOcr } from './specialSeries';
 
 export interface MatchEvaluationResult {
   matchType: MatchType;
@@ -34,7 +35,11 @@ export function evaluateDatabaseMatch(
   charConfidences?: CharacterConfidence[],
   minConfidenceThreshold: number = 0.65
 ): MatchEvaluationResult {
-  const norm = normalizePlate(ocrReading);
+  const correction = correctMalaysianPlateOcr(ocrReading, {
+    ocrConfidence,
+    characterConfidences: charConfidences,
+  });
+  const norm = correction.normalized || normalizePlate(ocrReading);
   const patternVal = validateMalaysianPattern(norm);
 
   // Safety check 1: Extremely short or missing reading

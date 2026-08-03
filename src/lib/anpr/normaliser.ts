@@ -1,4 +1,5 @@
 import { CharacterConfidence, PlateCategory } from '../db/types';
+import { findSpecialSeriesPrefix, generateSpecialPlateCandidates } from './specialSeries';
 
 /**
  * Normalises a raw plate string according to Malaysian ANPR rules:
@@ -27,9 +28,12 @@ export function formatDisplayPlate(normalized: string, _category?: PlateCategory
   void _category;
   if (!normalized) return '';
 
-  const longWordSeries = /^(PUTRAJAYA|MALAYSIA|PATRIOT|PROTON|PERODUA|PETRA|MADANI|BAMBEE|PERFECT|RIMAU|AIRFORCE|SUKMA|XXVIASEAN|ASEAN)([0-9]{1,5}[A-Z]?)$/.exec(normalized);
-  if (longWordSeries) {
-    return `${longWordSeries[1]} ${longWordSeries[2]}`;
+  const specialPrefix = findSpecialSeriesPrefix(normalized);
+  if (specialPrefix) {
+    const suffix = normalized.slice(specialPrefix.length);
+    if (/^[0-9]{1,5}[A-Z]?$/.test(suffix)) {
+      return `${specialPrefix} ${suffix}`;
+    }
   }
 
   // EV Special: EV 1234, EVA 1234, EVB 1234 A
@@ -110,6 +114,11 @@ export function generateCandidatePlates(
 ): string[] {
   if (!normalized) return [];
   const candidates = new Set<string>();
+  generateSpecialPlateCandidates(normalized, maxPermutations).forEach((candidate) => {
+    if (candidate !== normalized && candidates.size < maxPermutations) {
+      candidates.add(candidate);
+    }
+  });
 
   // Determine candidate positions for substitution
   const candidateIndices: number[] = [];

@@ -12,7 +12,13 @@ export type PreprocessVariant =
   | 'NOISE_REDUCED'
   | 'GAMMA_BRIGHTEN'
   | 'HIGHLIGHT_REDUCED'
-  | 'PERSPECTIVE';
+  | 'PERSPECTIVE'
+  | 'ADAPTIVE_THRESHOLD'
+  | 'BLACKHAT'
+  | 'TOPHAT'
+  | 'CONTRAST_BOOST'
+  | 'WIDE_CROP'
+  | 'LARGE_TEXT';
 
 export interface MultiCropResult {
   variant: PreprocessVariant;
@@ -91,7 +97,7 @@ function getAdaptiveCropTargetSize(
   targetHeight: number
 ): { width: number; height: number } {
   const rawAspect = bbox.width / Math.max(1, bbox.height);
-  const aspect = Number.isFinite(rawAspect) ? clamp(rawAspect, 0.65, 7.2) : 3.3;
+  const aspect = Number.isFinite(rawAspect) ? clamp(rawAspect, 0.65, 8.8) : 3.3;
 
   if (aspect < 2.3) {
     const width = aspect < 1.6 ? 288 : 336;
@@ -124,7 +130,7 @@ export function detectPlateCandidatesCV(
   if (!ctx) return [];
 
   const candidates: BoundingBox[] = [];
-  const plateAspectRatios = [5.6, 4.7, 3.8, 3.2, 2.4, 1.8, 1.25, 0.95];
+  const plateAspectRatios = [8.4, 7.6, 6.6, 5.6, 4.7, 3.8, 3.2, 2.4, 1.8, 1.25, 0.95];
   const scanScales = [0.08, 0.12, 0.18, 0.25, 0.35, 0.45, 0.55];
 
   for (const scale of scanScales) {
@@ -202,9 +208,9 @@ function mergeAdjacentBoxes(boxes: BoundingBox[]): BoundingBox[] {
           const newW = Math.max(curRight, bRight) - newX;
           const newH = Math.max(cur.y + cur.height, b.y + b.height) - newY;
           
-          // Verify aspect ratio of merged box is still realistic for a plate (0.8 to 6.5)
+          // Verify aspect ratio of merged box is still realistic for a plate, including long special series.
           const mergedAR = newW / Math.max(1, newH);
-          if (mergedAR >= 0.65 && mergedAR <= 7.2) {
+          if (mergedAR >= 0.65 && mergedAR <= 8.8) {
             cur = {
               x: newX,
               y: newY,
@@ -336,15 +342,8 @@ function computeBoxIoU(a: BoundingBox, b: BoundingBox): number {
 }
 
 /**
- * Generate 8 adaptive image preprocessing versions for OCR recognition:
- * - Original
- * - Grayscale
- * - Default Contrast (Binarized)
- * - Inverted (White background plates / JPJePlate)
- * - CLAHE (Histogram Contrast Stretch)
- * - Sharpened
- * - Dark Background (Black plate optimization)
- * - Noise Reduced
+ * Generate adaptive image preprocessing versions for OCR recognition across
+ * black, white, reflective, two-line, square, and special-series plate crops.
  */
 export function generateAdaptiveCrops(
   sourceCanvas: HTMLCanvasElement | HTMLVideoElement,
@@ -375,12 +374,21 @@ export function generateAdaptiveCrops(
 
   for (const variant of variants) {
     const cropCanvas = document.createElement('canvas');
-    const outputSize = getAdaptiveCropTargetSize(bbox, targetWidth, targetHeight);
+    const outputSize = variant === 'WIDE_CROP'
+      ? getAdaptiveCropTargetSize(
+          { ...bbox, width: bbox.width * 1.18 },
+          Math.max(targetWidth, 440),
+          Math.max(targetHeight, 124)
+        )
+      : getAdaptiveCropTargetSize(bbox, targetWidth, targetHeight);
 
     // Auto-upscale small plates from distant vehicles
     let scaleFactor = 1.0;
     if (bbox.width < 120 || bbox.height < 35) {
       scaleFactor = 1.6; // Upscale distant small plates
+    }
+    if (variant === 'LARGE_TEXT') {
+      scaleFactor = Math.max(scaleFactor, 1.35);
     }
 
     const scaledW = Math.round(outputSize.width * scaleFactor);
@@ -392,7 +400,11 @@ export function generateAdaptiveCrops(
     if (!ctx) continue;
 
     const { width: sourceWidth, height: sourceHeight } = getSourceDimensions(sourceCanvas);
-    const cropBox = clampCropBox(bbox, sourceWidth, sourceHeight);
+    const cropBox = variant === 'WIDE_CROP'
+      ? clampCropBox(bbox, sourceWidth, sourceHeight, 0.18, 0.14)
+      : variant === 'LARGE_TEXT'
+        ? clampCropBox(bbox, sourceWidth, sourceHeight, 0.04, 0.06)
+        : clampCropBox(bbox, sourceWidth, sourceHeight);
 
     ctx.drawImage(sourceCanvas, cropBox.x, cropBox.y, cropBox.width, cropBox.height, 0, 0, scaledW, scaledH);
 
@@ -439,6 +451,7 @@ export function preprocessCropVariant(
     applyPerspectiveRectification(ctx, width, height);
     return;
   }
+  if (variant === 'WIDE_CROP') return;
 
   const imgData = ctx.getImageData(0, 0, width, height);
   const data = imgData.data;
@@ -465,6 +478,18 @@ export function preprocessCropVariant(
       const v = data[i] > threshold ? 255 : 0;
       data[i] = data[i + 1] = data[i + 2] = v;
     }
+  } else if (variant === 'CONTRAST_BOOST') {
+    for (let i = 0; i < data.length; i += 4) {
+      const normalized = (data[i] - minL) / range;
+      const boosted = clamp((normalized - 0.5) * 1.55 + 0.5, 0, 1);
+      data[i] = data[i + 1] = data[i + 2] = Math.round(boosted * 255);
+    }
+  } else if (variant === 'ADAPTIVE_THRESHOLD') {
+    applyAdaptiveThreshold(data, width, height);
+  } else if (variant === 'BLACKHAT') {
+    applyMorphologicalContrast(data, width, height, 'BLACKHAT');
+  } else if (variant === 'TOPHAT') {
+    applyMorphologicalContrast(data, width, height, 'TOPHAT');
   } else if (variant === 'INVERTED') {
     // Inverted for White background plates (JPJePlate EV, Taxis) -> turn black text to white for OCR
     const threshold = minL + range * 0.52;
@@ -519,9 +544,73 @@ export function preprocessCropVariant(
       const v = Math.round(clamp(compressed * 1.08, 0, 1) * 255);
       data[i] = data[i + 1] = data[i + 2] = v;
     }
+  } else if (variant === 'LARGE_TEXT') {
+    for (let i = 0; i < data.length; i += 4) {
+      const norm = Math.round(((data[i] - minL) / range) * 255);
+      data[i] = data[i + 1] = data[i + 2] = norm;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    applySharpenKernel(ctx, width, height);
+    return;
   }
 
   ctx.putImageData(imgData, 0, 0);
+}
+
+function applyAdaptiveThreshold(data: Uint8ClampedArray, width: number, height: number): void {
+  const src = new Uint8ClampedArray(data);
+  const radius = Math.max(3, Math.min(9, Math.round(Math.min(width, height) / 18)));
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      let count = 0;
+
+      for (let yy = Math.max(0, y - radius); yy <= Math.min(height - 1, y + radius); yy++) {
+        for (let xx = Math.max(0, x - radius); xx <= Math.min(width - 1, x + radius); xx++) {
+          sum += src[(yy * width + xx) * 4];
+          count++;
+        }
+      }
+
+      const idx = (y * width + x) * 4;
+      const threshold = sum / Math.max(1, count) - 6;
+      const v = src[idx] > threshold ? 255 : 0;
+      data[idx] = data[idx + 1] = data[idx + 2] = v;
+    }
+  }
+}
+
+function applyMorphologicalContrast(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  mode: 'BLACKHAT' | 'TOPHAT'
+): void {
+  const src = new Uint8ClampedArray(data);
+  const radius = Math.max(1, Math.min(3, Math.round(Math.min(width, height) / 50)));
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let localMin = 255;
+      let localMax = 0;
+
+      for (let yy = Math.max(0, y - radius); yy <= Math.min(height - 1, y + radius); yy++) {
+        for (let xx = Math.max(0, x - radius); xx <= Math.min(width - 1, x + radius); xx++) {
+          const v = src[(yy * width + xx) * 4];
+          if (v < localMin) localMin = v;
+          if (v > localMax) localMax = v;
+        }
+      }
+
+      const idx = (y * width + x) * 4;
+      const original = src[idx];
+      const enhanced = mode === 'BLACKHAT'
+        ? clamp((localMax - original) * 1.7, 0, 255)
+        : clamp((original - localMin) * 1.7, 0, 255);
+      data[idx] = data[idx + 1] = data[idx + 2] = Math.round(enhanced);
+    }
+  }
 }
 
 function applySharpenKernel(ctx: CanvasRenderingContext2D, width: number, height: number): void {

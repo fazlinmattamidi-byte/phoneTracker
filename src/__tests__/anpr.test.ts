@@ -20,6 +20,12 @@ import {
   isEnvironmentProfileActionable,
   PLATE_QUALITY_CLASSES,
 } from '../lib/anpr/adaptiveConfig';
+import {
+  correctMalaysianPlateOcr,
+  rankSpecialSeriesPrefixCandidates,
+  resetRuntimeSpecialSeriesPrefixes,
+  setRuntimeSpecialSeriesPrefixes,
+} from '../lib/anpr/specialSeries';
 
 describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
 
@@ -55,19 +61,68 @@ describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
     expect(validateMalaysianPattern('Z1234').category).toBe('GOVERNMENT');
     expect(validateMalaysianPattern('PATRIOT123').category).toBe('SPECIAL_SERIES');
     expect(validateMalaysianPattern('MALAYSIA200').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('MALAYSIA1').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('MALAYSIA2020').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('MADANI888').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('GOLD2025').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('PERODUA1').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('PROTON1').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('LOTUS1').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('VIP88').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('FF99').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('QV999').category).toBe('SPECIAL_SERIES');
     expect(validateMalaysianPattern('VEP1234').category).toBe('INSTITUTIONAL');
     expect(validateMalaysianPattern('JSD8888').category).toBe('STANDARD');
     expect(validateMalaysianPattern('ABC123').category).toBe('STANDARD');
     expect(validateMalaysianPattern('VNA453').category).toBe('STANDARD');
-    expect(validateMalaysianPattern('WWW1').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('WWW1').category).toBe('SPECIAL_SERIES');
+    expect(validateMalaysianPattern('WWW888').category).toBe('SPECIAL_SERIES');
     expect(validateMalaysianPattern('B20').category).toBe('STANDARD');
     expect(validateMalaysianPattern('A1').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('B1').category).toBe('STANDARD');
+    expect(validateMalaysianPattern('C1').category).toBe('STANDARD');
     expect(validateMalaysianPattern('JQ1234').category).toBe('STANDARD');
   });
 
   it('generates character confusion candidates for OCR ambiguity', () => {
     const candidates = generateCandidatePlates('WXY77B8');
     expect(candidates).toContain('WXY7788');
+    expect(generateCandidatePlates('G0LD88')).toContain('GOLD88');
+  });
+
+  it('corrects special series OCR using Malaysian context', () => {
+    expect(correctMalaysianPlateOcr('MALAYS1A200').normalized).toBe('MALAYSIA200');
+    expect(correctMalaysianPlateOcr('MALAYSA200', { ocrConfidence: 0.96 }).normalized).toBe('MALAYSIA200');
+    expect(correctMalaysianPlateOcr('MADA N1888').normalized).toBe('MADANI888');
+    expect(correctMalaysianPlateOcr('PUTRAJAYA I').normalized).toBe('PUTRAJAYA1');
+    expect(correctMalaysianPlateOcr('PUTRAJYA88', { ocrConfidence: 0.94 }).normalized).toBe('PUTRAJAYA88');
+    expect(correctMalaysianPlateOcr('WWWI').normalized).toBe('WWW1');
+    expect(correctMalaysianPlateOcr('G0LD88').normalized).toBe('GOLD88');
+    expect(correctMalaysianPlateOcr('JSD8888', { ocrConfidence: 0.99 }).normalized).toBe('JSD8888');
+  });
+
+  it('ranks registered special prefixes by probability evidence', () => {
+    const [topMalaysia] = rankSpecialSeriesPrefixCandidates('MALAYSA200', { ocrConfidence: 0.96 });
+    expect(topMalaysia.plate).toBe('MALAYSIA200');
+    expect(topMalaysia.editDistance).toBe(1);
+    expect(topMalaysia.score).toBeGreaterThan(0.8);
+
+    const [topPutrajaya] = rankSpecialSeriesPrefixCandidates('PUTRAJYA88', { ocrConfidence: 0.94 });
+    expect(topPutrajaya.plate).toBe('PUTRAJAYA88');
+    expect(topPutrajaya.prefixProbability).toBeGreaterThan(0.75);
+  });
+
+  it('accepts future special series from runtime configuration', () => {
+    setRuntimeSpecialSeriesPrefixes(['RX']);
+    expect(validateMalaysianPattern('RX1').category).toBe('SPECIAL_SERIES');
+    expect(formatDisplayPlate('RX1')).toBe('RX 1');
+    resetRuntimeSpecialSeriesPrefixes();
+  });
+
+  it('uses runtime special prefixes in probability correction', () => {
+    setRuntimeSpecialSeriesPrefixes(['RXPRIME']);
+    expect(correctMalaysianPlateOcr('RXPR1ME88', { ocrConfidence: 0.95 }).normalized).toBe('RXPRIME88');
+    resetRuntimeSpecialSeriesPrefixes();
   });
 
   it('detects possible matches correctly (edit distance & confusion)', () => {

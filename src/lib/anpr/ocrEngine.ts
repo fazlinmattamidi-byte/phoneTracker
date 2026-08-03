@@ -3,6 +3,12 @@ import { normalizePlate, formatDisplayPlate, generateCandidatePlates } from './n
 import { validateMalaysianPattern } from './patterns';
 import { CharacterConfidence, PlateCategory, PlateLayout } from '../db/types';
 import { recognizeWithPpOcr } from './ppOcrEngine';
+import { generateAdaptiveCrops, releaseCanvasMemory, PreprocessVariant } from './imageProcessor';
+import {
+  correctMalaysianPlateOcr,
+  generateSpecialPlateCandidates,
+  isPotentialSpecialSeriesCandidate,
+} from './specialSeries';
 
 let workerPromise: Promise<Worker> | null = null;
 
@@ -50,10 +56,17 @@ export async function recognizePlateFromCanvas(
     // Primary Engine: Local PP-OCR ONNX Model ONLY
     const ppOcrResult = await recognizeWithPpOcr(cropCanvas, isTwoLineHint);
     if (ppOcrResult) {
-      return {
+      const candidates: OcrRecognitionResult[] = [{
         ...ppOcrResult,
         engineUsed: 'PP_OCR',
-      };
+      }];
+
+      if (shouldRunSpecialAdaptiveOcrPass(cropCanvas, candidates[0])) {
+        const adaptiveResults = await runSpecialAdaptiveOcrPass(cropCanvas, isTwoLineHint);
+        candidates.push(...adaptiveResults);
+      }
+
+      return chooseBestRecognitionResult(candidates);
     }
 
     return createEmptyResult();
@@ -61,6 +74,101 @@ export async function recognizePlateFromCanvas(
     console.warn('[ANPR OcrEngine] Error in PP-OCR recognition:', err);
     return createEmptyResult();
   }
+}
+
+const SPECIAL_OCR_PREPROCESSING: PreprocessVariant[] = [
+  'CONTRAST_BOOST',
+  'ADAPTIVE_THRESHOLD',
+  'CLAHE',
+  'SHARPEN',
+  'BLACKHAT',
+  'TOPHAT',
+  'WIDE_CROP',
+  'LARGE_TEXT',
+  'HIGHLIGHT_REDUCED',
+  'INVERTED',
+];
+
+function shouldRunSpecialAdaptiveOcrPass(
+  cropCanvas: HTMLCanvasElement,
+  result: OcrRecognitionResult
+): boolean {
+  const confidence = result.confidence;
+  const plate = result.normalizedPlate || result.text;
+  const pattern = validateMalaysianPattern(plate);
+  const aspect = cropCanvas.width / Math.max(1, cropCanvas.height);
+  const adaptiveCategory =
+    pattern.category === 'SPECIAL_SERIES' ||
+    pattern.category === 'PUTRAJAYA' ||
+    pattern.category === 'EV_SPECIAL';
+  const potentialSpecial = isPotentialSpecialSeriesCandidate(plate);
+  const specialLikely =
+    adaptiveCategory ||
+    potentialSpecial ||
+    plate.length >= 9 ||
+    aspect >= 5.8;
+
+  if (!specialLikely) return false;
+  if (confidence >= 0.97 && pattern.isValid && pattern.score >= 0.70) return false;
+
+  const inVotingBand = confidence >= 0.80 && confidence < 0.97;
+  const weakButSpecific = confidence >= 0.45 && (adaptiveCategory || potentialSpecial) && pattern.score >= 0.50;
+  return inVotingBand || weakButSpecific;
+}
+
+async function runSpecialAdaptiveOcrPass(
+  cropCanvas: HTMLCanvasElement,
+  isTwoLineHint?: boolean
+): Promise<OcrRecognitionResult[]> {
+  const adaptiveCrops = generateAdaptiveCrops(
+    cropCanvas,
+    { x: 0, y: 0, width: cropCanvas.width, height: cropCanvas.height, confidence: 1 },
+    440,
+    124,
+    SPECIAL_OCR_PREPROCESSING
+  );
+
+  const results: OcrRecognitionResult[] = [];
+
+  try {
+    for (const crop of adaptiveCrops.slice(0, 8)) {
+      const result = await recognizeWithPpOcr(crop.canvas, isTwoLineHint || crop.isTwoLine);
+      if (!result) continue;
+      results.push({
+        ...result,
+        engineUsed: 'PP_OCR',
+      });
+    }
+  } finally {
+    adaptiveCrops.forEach((crop) => {
+      releaseCanvasMemory(crop.canvas);
+      releaseCanvasMemory(crop.topLineCanvas);
+      releaseCanvasMemory(crop.bottomLineCanvas);
+    });
+  }
+
+  return results;
+}
+
+function chooseBestRecognitionResult(candidates: OcrRecognitionResult[]): OcrRecognitionResult {
+  const ranked = candidates
+    .filter((candidate) => candidate.normalizedPlate.length >= 2)
+    .map((candidate) => {
+      const pattern = validateMalaysianPattern(candidate.normalizedPlate);
+      const specialScore = isPotentialSpecialSeriesCandidate(candidate.normalizedPlate) ? 0.10 : 0;
+      const lengthScore = Math.min(1, candidate.normalizedPlate.length / 10);
+      const score =
+        candidate.confidence * 0.46 +
+        pattern.score * 0.34 +
+        lengthScore * 0.10 +
+        (pattern.isValid ? 0.08 : 0) +
+        specialScore;
+
+      return { candidate, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.candidate ?? candidates[0] ?? createEmptyResult();
 }
 
 /**
@@ -96,12 +204,13 @@ export async function recognizeWithTesseract(
 
     const topText = normalizePlate(topRes.data.text || '');
     const botText = normalizePlate(botRes.data.text || '');
-    const normMerged = normalizePlate(`${topText}${botText}`);
+    const rawMerged = normalizePlate(`${topText}${botText}`);
 
-    if (normMerged && normMerged.length >= 2) {
+    if (rawMerged && rawMerged.length >= 2) {
       const topConf = (topRes.data.confidence || 0) / 100;
       const botConf = (botRes.data.confidence || 0) / 100;
       const avgConf = Math.min(1.0, (topConf + botConf) / 2);
+      const normMerged = correctMalaysianPlateOcr(rawMerged, { ocrConfidence: avgConf }).normalized;
 
       const patternVal = validateMalaysianPattern(normMerged);
       const charConfs: CharacterConfidence[] = normMerged.split('').map((char, i) => ({
@@ -110,7 +219,10 @@ export async function recognizeWithTesseract(
         position: i,
       }));
 
-      const alternatives = generateCandidatePlates(normMerged);
+      const alternatives = Array.from(new Set([
+        ...generateSpecialPlateCandidates(rawMerged, 12, { ocrConfidence: avgConf }),
+        ...generateCandidatePlates(normMerged),
+      ])).filter((candidate) => candidate !== normMerged);
 
       return {
         text: normMerged,
@@ -130,8 +242,9 @@ export async function recognizeWithTesseract(
 
   // Single-line OCR
   const result = await worker.recognize(cropCanvas);
-  const normText = normalizePlate(result.data.text || '');
+  const rawText = result.data.text || '';
   const fullConf = Math.min(1.0, (result.data.confidence || 0) / 100);
+  const normText = correctMalaysianPlateOcr(rawText, { ocrConfidence: fullConf }).normalized;
 
   const patternVal = validateMalaysianPattern(normText);
   const charConfs: CharacterConfidence[] = [];
@@ -158,7 +271,10 @@ export async function recognizeWithTesseract(
     });
   }
 
-  const alternatives = generateCandidatePlates(normText);
+  const alternatives = Array.from(new Set([
+    ...generateSpecialPlateCandidates(rawText, 12, { ocrConfidence: fullConf }),
+    ...generateCandidatePlates(normText),
+  ])).filter((candidate) => candidate !== normText);
 
   return {
     text: normText,

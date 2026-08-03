@@ -13,6 +13,10 @@ import { normalizePlate, formatDisplayPlate, generateCandidatePlates } from './n
 import { validateMalaysianPattern } from './patterns';
 import { releaseCanvasMemory, splitTwoLineCrop } from './imageProcessor';
 import {
+  correctMalaysianPlateOcr,
+  isPotentialSpecialSeriesCandidate,
+} from './specialSeries';
+import {
   canUseWebGpuExecutionProvider,
   configureOrtWasm,
   fetchWithTimeout,
@@ -252,28 +256,13 @@ export async function recognizeWithPpOcr(
   const normText = normalizePlate(res.rawText);
   if (!normText) return null;
 
-  const patternVal = validateMalaysianPattern(normText);
   const charConfs: CharacterConfidence[] = res.characterConfidences.map((c, i) => ({
     char: c.char,
     confidence: c.confidence,
     position: i,
   }));
 
-  const alternatives = generateCandidatePlates(normText, charConfs);
-
-  return {
-    text: normText,
-    normalizedPlate: normText,
-    displayPlate: formatDisplayPlate(normText, patternVal.category),
-    confidence: res.confidence,
-    characterConfidences: charConfs,
-    alternativeCandidates: alternatives,
-    layout: 'SINGLE_LINE',
-    category: patternVal.category,
-    patternScore: patternVal.score,
-    hasTrailingSuffix: patternVal.hasTrailingSuffix,
-    engineUsed: 'PP_OCR',
-  };
+  return buildPpOcrResult(normText, res.confidence, charConfs, 'SINGLE_LINE');
 }
 
 function buildPpOcrResult(
@@ -282,14 +271,25 @@ function buildPpOcrResult(
   characterConfidences: CharacterConfidence[],
   layout: PlateLayout
 ): PpOcrRecognitionResult {
-  const patternVal = validateMalaysianPattern(normalizedPlate);
-  const alternatives = generateCandidatePlates(normalizedPlate, characterConfidences);
+  const correction = correctMalaysianPlateOcr(normalizedPlate, {
+    ocrConfidence: confidence,
+    characterConfidences,
+  });
+  const correctedPlate = correction.normalized || normalizedPlate;
+  const patternVal = validateMalaysianPattern(correctedPlate);
+  const alternatives = Array.from(new Set([
+    ...correction.alternatives,
+    ...generateCandidatePlates(correctedPlate, characterConfidences),
+  ])).filter((candidate) => candidate !== correctedPlate);
+  const correctedConfidence = correction.corrected
+    ? Math.min(1.0, confidence + Math.min(0.06, patternVal.score * 0.05))
+    : confidence;
 
   return {
-    text: normalizedPlate,
-    normalizedPlate,
-    displayPlate: formatDisplayPlate(normalizedPlate, patternVal.category),
-    confidence,
+    text: correctedPlate,
+    normalizedPlate: correctedPlate,
+    displayPlate: formatDisplayPlate(correctedPlate, patternVal.category),
+    confidence: correctedConfidence,
     characterConfidences,
     alternativeCandidates: alternatives,
     layout,
@@ -339,14 +339,16 @@ function chooseBestOcrCandidate(candidates: PpOcrRecognitionResult[]): PpOcrReco
       const hasDigits = /[0-9]/.test(candidate.normalizedPlate);
       const lengthScore = Math.min(1, candidate.normalizedPlate.length / 7);
       const layoutScore = candidate.layout === 'TWO_LINE' || candidate.layout === 'SQUARE' ? 0.06 : 0;
+      const specialScore = isPotentialSpecialSeriesCandidate(candidate.normalizedPlate) ? 0.10 : 0;
       const implausiblePenalty = hasLetters && hasDigits ? 0 : 0.4;
       const score =
-        candidate.confidence * 0.48 +
+        candidate.confidence * 0.46 +
         pattern.score * 0.34 +
         lengthScore * 0.12 +
         (pattern.isValid ? 0.08 : 0) +
         layoutScore -
-        implausiblePenalty;
+        implausiblePenalty +
+        specialScore;
 
       return { candidate, score };
     })
