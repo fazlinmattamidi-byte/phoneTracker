@@ -5434,6 +5434,7 @@ export default function ScannerPage() {
                 )}
                 {isAlertSlot && activeSlotAlert && (
                   <div className="scanner-alert-card absolute inset-1.5 z-30 overflow-y-auto rounded-xl border-2 border-red-400 bg-red-600 p-2.5 text-left shadow-2xl sm:p-4">
+                    {/* Header */}
                     <div className="flex items-center justify-between border-b border-red-500/80 pb-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <ShieldAlert className="w-4 h-4 text-white animate-bounce shrink-0" />
@@ -5458,6 +5459,7 @@ export default function ScannerPage() {
                       </button>
                     </div>
 
+                    {/* Vehicle & Plate Images */}
                     <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[1.4fr_0.8fr]">
                       <div className="relative overflow-hidden rounded-lg border border-red-400/60 bg-red-800/55">
                         {activeSlotAlert.vehicleImageDataUrl ? (
@@ -5494,39 +5496,37 @@ export default function ScannerPage() {
                           )}
                           {activeSlotAlert.plateImageDataUrl && <div className="h-16" />}
                         </div>
-                        <div className="rounded-lg border border-red-400/60 bg-red-700 px-2.5 py-2">
-                          <span className="text-[9px] text-red-100 font-bold uppercase block">{t('plateNumber')}</span>
-                          <span className="plate-yellow text-lg sm:text-xl font-mono font-black">
-                            {activeSlotAlert.plate}
-                          </span>
-                          <div className="mt-1 font-mono text-[10px] font-bold text-red-100">
-                            {activeSlotAlert.confidence}% · {activeSlotAlert.timestamp}
-                          </div>
-                        </div>
                       </div>
                     </div>
 
-                    <div className="mt-2 bg-red-700 border border-red-400/50 rounded-lg p-2.5 sm:p-3 space-y-2 text-left shadow-inner">
-                      <div className="grid grid-cols-2 gap-2 border-b border-red-500/80 pb-2">
+                    {/* Prominent Info: Nombor Plat + Jumlah Tunggakan */}
+                    <div className="mt-2 rounded-lg border border-red-400/60 bg-red-700/80 px-3 py-2.5">
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <span className="text-[9px] text-red-100 font-bold uppercase block">
-                            {language === 'BM' ? 'Pemilik' : 'Matched'}
+                          <span className="text-[9px] text-red-200 font-bold uppercase tracking-wide block">{t('plateNumber')}</span>
+                          <span className="plate-yellow text-lg sm:text-xl font-mono font-black leading-tight">
+                            {activeSlotAlert.plate}
                           </span>
-                          <span className="text-sm sm:text-base font-black text-white">
-                            {activeSlotAlert.vehicle.customerName}
-                          </span>
+                          <div className="mt-0.5 font-mono text-[10px] font-bold text-red-200">
+                            {activeSlotAlert.confidence}% · {activeSlotAlert.timestamp}
+                          </div>
                         </div>
                         <div>
-                          <span className="text-[9px] text-red-100 font-bold uppercase block">{t('outstandingAmount')}</span>
-                          <span className="text-base sm:text-lg font-mono font-black text-white">
+                          <span className="text-[9px] text-red-200 font-bold uppercase tracking-wide block">
+                            {language === 'BM' ? 'Jumlah Tunggakan' : 'Outstanding Amount'}
+                          </span>
+                          <span className="text-base sm:text-lg font-mono font-black text-white leading-tight">
                             {formatMYR(activeSlotAlert.vehicle.outstandingAmount)}
                           </span>
                         </div>
                       </div>
+                    </div>
 
+                    {/* Vehicle Details */}
+                    <div className="mt-2 bg-red-700 border border-red-400/50 rounded-lg p-2.5 sm:p-3 space-y-2 text-left shadow-inner">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] sm:text-xs">
                         <div>
-                          <span className="text-red-100 block">{t('vehicleDetails')}</span>
+                          <span className="text-red-100 block">{language === 'BM' ? 'Kenderaan' : 'Vehicle'}</span>
                           <strong className="text-white truncate block">
                             {activeSlotAlert.vehicle.brand} {activeSlotAlert.vehicle.model}
                           </strong>
@@ -5536,21 +5536,26 @@ export default function ScannerPage() {
                           <strong className="text-white truncate block">{activeSlotAlert.cameraName}</strong>
                         </div>
                         <div>
+                          <span className="text-red-100 block">{language === 'BM' ? 'Pemilik' : 'Owner'}</span>
+                          <strong className="text-white truncate block">{activeSlotAlert.vehicle.customerName}</strong>
+                        </div>
+                        <div>
                           <span className="text-red-100 block">{language === 'BM' ? 'Warna' : 'Colour'}</span>
                           <strong className="text-white truncate block">{activeSlotAlert.vehicle.colour}</strong>
                         </div>
                       </div>
                     </div>
 
-                    <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 border-t border-red-500/80 pt-2">
+                    {/* Tanda Tindakan Button */}
+                    <div className="mt-2.5">
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
                           handleMarkAsSeen(slot.id);
                         }}
-                        className="btn-mark-seen px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-red-600 text-[10px] sm:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1 shadow-md transition-all"
+                        className="btn-mark-seen w-full py-2.5 rounded-lg bg-white hover:bg-slate-100 active:scale-95 text-red-600 text-[11px] sm:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition-all border-2 border-white/80"
                       >
-                        <BookmarkCheck className="w-3.5 h-3.5 text-red-600" />
+                        <BookmarkCheck className="w-4 h-4 text-red-600" />
                         <span>{t('markAction')}</span>
                       </button>
                     </div>
