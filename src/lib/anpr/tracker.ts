@@ -158,6 +158,7 @@ export function calculateCentroidDistance(boxA: BoundingBox, boxB: BoundingBox):
  */
 export class PlateTracker {
   private activeTracks: Map<string, ActiveTrack> = new Map();
+  private removedTracks: ActiveTrack[] = [];
   private trackCounter: number = 1;
   private frameIndex: number = 0;
   private iouThreshold: number = 0.30;
@@ -537,6 +538,10 @@ export class PlateTracker {
           track.stats.finalConfidence = track.stabilizedConfidence ?? track.trackConfidence;
           track.stats.lastUpdatedAt = now;
         }
+        this.removedTracks.push(track);
+        if (this.removedTracks.length > 32) {
+          this.removedTracks.splice(0, this.removedTracks.length - 32);
+        }
         this.activeTracks.delete(id);
       } else if (!track.visibleThisFrame) {
         track.missedFrames = Math.max(1, this.frameIndex - track.lastSeenFrame);
@@ -561,6 +566,12 @@ export class PlateTracker {
 
   public getTrack(trackId: string): ActiveTrack | undefined {
     return this.activeTracks.get(trackId);
+  }
+
+  public consumeRemovedTracks(): ActiveTrack[] {
+    const removed = this.removedTracks;
+    this.removedTracks = [];
+    return removed;
   }
 
   public setLostTrackTimeout(frames: number): void {
@@ -591,6 +602,7 @@ export class PlateTracker {
 
   public clear(): void {
     this.activeTracks.clear();
+    this.removedTracks = [];
     this.frameIndex = 0;
     this.trackCounter = 1;
   }

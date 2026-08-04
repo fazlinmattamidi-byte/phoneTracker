@@ -250,6 +250,24 @@ describe('FAT Tests: Tracker Scenarios and Plate Types', () => {
     expect(tracker.getTrack(firstTrack.trackId)).toBeUndefined();
   });
 
+  it('FAT Scenario 13b: removed tracks can be consumed for deferred evidence processing', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+
+    const firstTracks = tracker.updateTracks([{ x: 100, y: 100, width: 90, height: 30, confidence: 0.9 }]);
+    const firstTrack = firstTracks[0];
+    firstTrack.votes.set('VAB1234', { count: 2, totalConfidence: 1.8 });
+
+    vi.setSystemTime(3200);
+    tracker.updateTracks([]);
+
+    const removed = tracker.consumeRemovedTracks();
+    expect(removed).toHaveLength(1);
+    expect(removed[0].trackId).toBe(firstTrack.trackId);
+    expect(removed[0].votes.get('VAB1234')?.count).toBe(2);
+    expect(tracker.consumeRemovedTracks()).toHaveLength(0);
+  });
+
   it('FAT Scenario 14: A/B/A reacquisition starts fresh OCR consensus', () => {
     const carAFirstPass = tracker.updateTracks([{ x: 100, y: 100, width: 90, height: 30, confidence: 0.9 }]);
     const carAOldTrack = carAFirstPass[0];

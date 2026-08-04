@@ -27,8 +27,21 @@ import {
   resetRuntimeSpecialSeriesPrefixes,
   setRuntimeSpecialSeriesPrefixes,
 } from '../lib/anpr/specialSeries';
+import { scoreEvidenceFrameQuality } from '../lib/anpr/vehicleEvidenceBuffer';
 
 describe('PlateQ Universal ANPR Pipeline & Pattern Engine Tests', () => {
+
+  it('scores evidence frames using the weighted quality formula', () => {
+    const score = scoreEvidenceFrameQuality({
+      sharpness: 0.8,
+      plateSize: 0.6,
+      ocrConfidence: 0.9,
+      motionBlur: 0.7,
+      perspective: 0.5,
+    });
+
+    expect(score).toBeCloseTo(0.73, 5);
+  });
 
   it('normalises plate strings correctly preserving suffixes and long words', () => {
     expect(normalizePlate('  jSd-8888  ')).toBe('JSD8888');

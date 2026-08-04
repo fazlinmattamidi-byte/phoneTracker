@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useLanguage } from '@/context/LanguageContext';
 import { useStorage } from '@/context/StorageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -45,6 +46,11 @@ import {
   scaleBoundingBox,
 } from '@/lib/anpr/imageProcessor';
 import { BestFrameSelector } from '@/lib/anpr/bestFrameSelector';
+import {
+  FinishedVehicleEvidence,
+  scoreEvidenceFrameQuality,
+  VehicleEvidenceBuffer,
+} from '@/lib/anpr/vehicleEvidenceBuffer';
 import { recognizePlateFromCanvas } from '@/lib/anpr/ocrEngine';
 import { addOcrVoteToTrack, evaluateConsensus, promoteCorrectedOcrVote } from '@/lib/anpr/consensus';
 import { isRepeatedCharacterOmission } from '@/lib/anpr/normaliser';
@@ -108,6 +114,13 @@ type AlertMatch = {
   vehicle: Vehicle;
   cameraName: string;
   cameraId: string;
+  plate: string;
+  confidence: number;
+  timestamp: string;
+  detectedAtIso: string;
+  vehicleImageDataUrl?: string;
+  plateImageDataUrl?: string;
+  trackId?: string;
 };
 
 type CameraSlot = {
@@ -124,6 +137,9 @@ type SessionDetection = DetectionLog &
   ScanLocation & {
     matchType?: 'EXACT' | 'POSSIBLE' | 'NONE';
     possibleVehicleIds?: string[];
+    vehicleImageDataUrl?: string;
+    plateImageDataUrl?: string;
+    trackId?: string;
   };
 
 type SeenPlateItem = {
@@ -146,6 +162,7 @@ type AudioWindow = Window &
 type SlotScannerRuntime = {
   tracker: PlateTracker;
   bestFrameSelector: BestFrameSelector;
+  evidenceBuffer: VehicleEvidenceBuffer;
   processingCanvas: HTMLCanvasElement | null;
   lastMaintenanceTs: number;
 };
@@ -332,6 +349,37 @@ type DatasetSample = {
   detectorConfidence: number;
   trackConfidence: number;
   camera: CameraRuntimeMetadata | null;
+};
+
+type FinalEvidencePayload = {
+  trackId?: string;
+  vehicleImageDataUrl?: string;
+  plateImageDataUrl?: string;
+  firstSeenAt?: number;
+  lastSeenAt?: number;
+  completedAt?: number;
+  consensusCount?: number;
+  cropQuality?: number;
+  detectorConfidence?: number;
+  trackConfidence?: number;
+  reasonForCompletion?: string;
+};
+
+type FinalEvidenceOcrResult = {
+  plate: string;
+  confidence: number;
+  score: number;
+  voteCount: number;
+  consensusCount: number;
+};
+
+type EvidenceProcessingJob = {
+  id: string;
+  evidence: FinishedVehicleEvidence;
+  slotRuntime: SlotScannerRuntime;
+  sourceSlotId: string;
+  enqueuedAt: number;
+  generation: number;
 };
 
 type HealthStatus = 'OK' | 'WARN' | 'FAIL' | 'UNKNOWN';
@@ -1088,6 +1136,12 @@ const OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE = 0.50;
 const OCR_QUICK_DB_MIN_SCORE = 0.58;
 const OCR_QUICK_DB_MIN_CONFIDENCE = 0.26;
 const OCR_DESKEW_MIN_ANGLE_RAD = 0.055;
+const EVIDENCE_FINAL_OCR_TOP_CROPS = 4;
+const EVIDENCE_FINAL_OCR_MIN_CONFIDENCE = 0.34;
+const EVIDENCE_FINAL_OCR_MIN_SCORE = 0.52;
+const EVIDENCE_FINAL_MIN_VOTES = 2;
+const EVIDENCE_QUEUE_WORKER_LIMIT = 3;
+const EVIDENCE_QUEUE_MAX_SIZE = 24;
 const MOTION_NORMAL_MAX = 0.15;
 const MOTION_UNSTABLE_MAX = 0.30;
 const MOTION_COLLECT_ONLY_MAX = 0.50;
@@ -1288,48 +1342,6 @@ function canCommitFinalPlateOutcome(text: string, voteCount: number = 1): boolea
   if (voteCount < 2 && !isCompleteSingleReadCandidate(text, pattern, voteCount)) return false;
 
   return true;
-}
-
-function canCommitNoMatchOutcome(text: string, confidence: number, score: number, voteCount: number): boolean {
-  const pattern = validateMalaysianPattern(text);
-  const { letters, digits } = countPlateChars(text);
-
-  // A single fast OCR pass may be useful for alerting an exact DB match, but it
-  // must not finalize "no case"; partial reads like AN756 can look valid.
-  if (voteCount < 2) return false;
-  if (Math.max(confidence, score) < OCR_NO_MATCH_COMMIT_MIN_CONFIDENCE) return false;
-  if (text.length < 2 || letters === 0 || digits === 0) return false;
-  if (text.length >= 5 && digits < 2) return false;
-  if (!canCommitFinalPlateOutcome(text, voteCount)) return false;
-  if (!isCompleteNoMatchCandidate(text, pattern, confidence, score, voteCount)) return false;
-
-  return pattern.isValid || pattern.score >= 0.45;
-}
-
-function isCompleteNoMatchCandidate(
-  text: string,
-  pattern: ReturnType<typeof validateMalaysianPattern>,
-  confidence: number,
-  score: number,
-  voteCount: number
-): boolean {
-  const { letters, digits } = countPlateChars(text);
-  const category = pattern.category;
-
-  if (!pattern.isValid || letters === 0 || digits === 0 || text.length < 2) return false;
-  if (category === 'UNKNOWN_VALID_CANDIDATE') return false;
-  if (text.length <= 3) return pattern.score >= 0.70;
-  if (category === 'STANDARD') {
-    if (digits >= 3) return true;
-    return voteCount >= 3 || Math.max(confidence, score) >= 0.72;
-  }
-  if (category === 'EV_SPECIAL') return digits >= 3;
-  if (category === 'LETTER_NUMBER_SUFFIX') return pattern.hasTrailingSuffix && digits >= 2;
-  if (category === 'LANGKAWI' || category === 'SABAH' || category === 'SARAWAK') {
-    return pattern.hasTrailingSuffix ? digits >= 2 : digits >= 4;
-  }
-
-  return isCompleteSingleReadCandidate(text, pattern, voteCount);
 }
 
 function isCompleteSingleReadCandidate(
@@ -1825,6 +1837,12 @@ export default function ScannerPage() {
   const settingsRef = useRef<ScannerSettings>({ ...INITIAL_SETTINGS, debugMode: false });
   const cooldownMap = useRef<Map<string, number>>(new Map());
   const activeOcrCount = useRef(0);
+  const evidenceQueueRef = useRef<EvidenceProcessingJob[]>([]);
+  const evidenceWorkersActiveRef = useRef(0);
+  const evidenceDrainScheduledRef = useRef(false);
+  const evidenceJobCounterRef = useRef(0);
+  const evidenceQueueGenerationRef = useRef(0);
+  const drainEvidenceQueueRef = useRef<() => void>(() => undefined);
   const lastMetricsFlushTs = useRef(Date.now());
   const runtimeMetricsRef = useRef<ScannerRuntimeMetrics>(createInitialRuntimeMetrics());
   const completedTrackEventsRef = useRef<CompletedTrackEvent[]>([]);
@@ -1900,6 +1918,7 @@ export default function ScannerPage() {
       slotRuntimesRef.current[slotId] = {
         tracker: new PlateTracker(20, 8),
         bestFrameSelector: new BestFrameSelector(),
+        evidenceBuffer: new VehicleEvidenceBuffer(),
         processingCanvas: null,
         lastMaintenanceTs: 0,
       };
@@ -2169,10 +2188,18 @@ export default function ScannerPage() {
     Object.values(slotRuntimesRef.current).forEach((runtime) => {
       runtime.tracker.clear();
       runtime.bestFrameSelector.resetAll();
+      runtime.evidenceBuffer.clear();
       runtime.processingCanvas = null;
       runtime.lastMaintenanceTs = 0;
     });
     slotMetricsRef.current = {};
+    evidenceQueueGenerationRef.current++;
+    evidenceQueueRef.current.forEach((job) => {
+      job.slotRuntime.evidenceBuffer.releaseFinishedEvidence(job.evidence);
+    });
+    evidenceQueueRef.current = [];
+    evidenceWorkersActiveRef.current = 0;
+    evidenceDrainScheduledRef.current = false;
     activeOcrCount.current = 0;
     lastMetricsFlushTs.current = Date.now();
     runtimeMetricsRef.current = createInitialRuntimeMetrics(
@@ -2354,7 +2381,9 @@ export default function ScannerPage() {
       try {
         const storedDetections = localStorage.getItem(RECENT_DETECTIONS_STORAGE_KEY);
         if (storedDetections) {
-          const parsedDetections = JSON.parse(storedDetections) as SessionDetection[];
+          const parsedDetections = (JSON.parse(storedDetections) as SessionDetection[]).filter(
+            (detection) => detection.matchType === 'EXACT' || detection.matched
+          );
           setLiveDetections(parsedDetections.slice(0, 8));
           if (parsedDetections[0]) {
             setCurrentPlate(parsedDetections[0].plate);
@@ -2781,9 +2810,11 @@ export default function ScannerPage() {
       plate: string,
       confidence: number,
       slotId: string,
-      options: { commitNoCase?: boolean } = {}
+      options: { commitNoCase?: boolean; alertOnly?: boolean; evidence?: FinalEvidencePayload } = {}
     ) => {
       const commitNoCase = options.commitNoCase ?? true;
+      const alertOnly = options.alertOnly ?? false;
+      const evidence = options.evidence;
       const normalizedPlate = cleanPlateNumber(plate);
       const cooldownMs = settingsRef.current.duplicateCooldown * 1000;
       const now = Date.now();
@@ -2895,8 +2926,9 @@ export default function ScannerPage() {
       const timestamp = new Date();
       const scanCameraName = getCameraSlotLabelFromRefs(slotId);
       const scanLocation = SCAN_LOCATIONS[Math.floor(Math.random() * SCAN_LOCATIONS.length)];
-      const confidencePercent = Number((confidence * 100).toFixed(1));
+      const confidencePercent = Number((resolvedConfidence * 100).toFixed(1));
       const detectionId = `det-${timestamp.getTime()}-${Math.floor(Math.random() * 1000)}`;
+      const shouldEmitDetection = !alertOnly || resolvedMatchType === 'EXACT';
       const newDetection: SessionDetection = {
         id: detectionId,
         plate: resolvedPlate,
@@ -2910,85 +2942,93 @@ export default function ScannerPage() {
         gps: scanLocation.gps,
         matchType: resolvedMatchType,
         possibleVehicleIds: possibleVehicles.map((vehicle) => vehicle.id),
+        vehicleImageDataUrl: evidence?.vehicleImageDataUrl,
+        plateImageDataUrl: evidence?.plateImageDataUrl,
+        snapshotPlaceholder: evidence?.vehicleImageDataUrl,
+        trackId: evidence?.trackId ?? track.trackId,
       };
 
-      setCurrentPlate(resolvedPlate);
-      setLastDetectedSlotId(slotId);
-      setLiveDetections((prevStream) => {
-        const nextStream = [newDetection, ...prevStream.slice(0, 7)];
-        localStorage.setItem(RECENT_DETECTIONS_STORAGE_KEY, JSON.stringify(nextStream));
-        return nextStream;
-      });
+      if (shouldEmitDetection) {
+        setCurrentPlate(resolvedPlate);
+        setLastDetectedSlotId(slotId);
+        setLiveDetections((prevStream) => {
+          const nextStream = [newDetection, ...prevStream.slice(0, 7)];
+          localStorage.setItem(RECENT_DETECTIONS_STORAGE_KEY, JSON.stringify(nextStream));
+          return nextStream;
+        });
 
-      addHistoryLogRef.current({
-        type: 'DETECTION',
-        action:
-          resolvedMatchType === 'EXACT'
-            ? `Tanda Tindakan (Pengimbas): ${resolvedPlate}`
-            : resolvedMatchType === 'POSSIBLE'
-            ? `Possible Match (Pengimbas): ${resolvedPlate}`
-            : `Live Scan: ${resolvedPlate}`,
-        plate: resolvedPlate,
-        details:
-          resolvedMatchType === 'EXACT' && matchedVehicle
-            ? `AI Confidence: ${confidencePercent}% - Tanda Tindakan: ${matchedVehicle.brand} ${matchedVehicle.model} - Location: ${scanLocation.name} (${scanLocation.gps})`
-            : resolvedMatchType === 'POSSIBLE'
-            ? `AI Confidence: ${confidencePercent}% - Possible Match: ${possibleVehicles
-                .map((vehicle) => vehicle.plate)
-                .join(', ')} - Location: ${scanLocation.name} (${scanLocation.gps})`
-            : `AI Confidence: ${confidencePercent}% - No Match Found - Location: ${scanLocation.name} (${scanLocation.gps})`,
-        note:
-          resolvedMatchType === 'EXACT' && matchedVehicle
-            ? `Match Found: ${matchedVehicle.brand} ${matchedVehicle.model} via ${scanCameraName} at ${scanLocation.name}`
-            : resolvedMatchType === 'POSSIBLE'
-            ? `Possible match from ${scanCameraName}: ${possibleVehicles.map((vehicle) => vehicle.plate).join(', ')}`
-            : `No match from ${scanCameraName} at ${scanLocation.name}`,
-        cameraId: slotId || 'laptop-camera',
-        cameraName: scanCameraName,
-        userRole: role,
-        statusMatch: resolvedMatchType,
-      });
+        addHistoryLogRef.current({
+          type: 'DETECTION',
+          action:
+            resolvedMatchType === 'EXACT'
+              ? `Tanda Tindakan (Pengimbas): ${resolvedPlate}`
+              : resolvedMatchType === 'POSSIBLE'
+              ? `Possible Match (Pengimbas): ${resolvedPlate}`
+              : `Live Scan: ${resolvedPlate}`,
+          plate: resolvedPlate,
+          details:
+            resolvedMatchType === 'EXACT' && matchedVehicle
+              ? `AI Confidence: ${confidencePercent}% - Tanda Tindakan: ${matchedVehicle.brand} ${matchedVehicle.model} - Location: ${scanLocation.name} (${scanLocation.gps})`
+              : resolvedMatchType === 'POSSIBLE'
+              ? `AI Confidence: ${confidencePercent}% - Possible Match: ${possibleVehicles
+                  .map((vehicle) => vehicle.plate)
+                  .join(', ')} - Location: ${scanLocation.name} (${scanLocation.gps})`
+              : `AI Confidence: ${confidencePercent}% - No Match Found - Location: ${scanLocation.name} (${scanLocation.gps})`,
+          note:
+            resolvedMatchType === 'EXACT' && matchedVehicle
+              ? `Match Found: ${matchedVehicle.brand} ${matchedVehicle.model} via ${scanCameraName} at ${scanLocation.name}`
+              : resolvedMatchType === 'POSSIBLE'
+              ? `Possible match from ${scanCameraName}: ${possibleVehicles.map((vehicle) => vehicle.plate).join(', ')}`
+              : `No match from ${scanCameraName} at ${scanLocation.name}`,
+          cameraId: slotId || 'laptop-camera',
+          cameraName: scanCameraName,
+          userRole: role,
+          statusMatch: resolvedMatchType,
+        });
+      }
 
-      const completedAt = Date.now();
-      const startedAt = track.stats?.startedAt ?? completedAt;
-      const consensusCount = Array.from(track.votes.values()).reduce((sum, vote) => sum + vote.count, 0);
+      const completedAt = evidence?.completedAt ?? Date.now();
+      const startedAt = evidence?.firstSeenAt ?? track.stats?.startedAt ?? completedAt;
+      const consensusCount =
+        evidence?.consensusCount ?? Array.from(track.votes.values()).reduce((sum, vote) => sum + vote.count, 0);
       const processingTimeMs = Math.max(0, completedAt - startedAt);
       runtimeMetricsRef.current.completedTrackCount++;
       runtimeMetricsRef.current.trackLifetimeTotalMs += processingTimeMs;
       if (track.stats) {
         track.stats.finishedAt = completedAt;
-        track.stats.finalConfidence = confidence;
+        track.stats.finalConfidence = resolvedConfidence;
       }
       completedTrackEventsRef.current.unshift({
         id: detectionId,
-        trackId: track.trackId,
+        trackId: evidence?.trackId ?? track.trackId,
         cameraId: slotId || 'laptop-camera',
         cameraName: scanCameraName,
         plate: resolvedPlate,
         startedAt: new Date(startedAt).toISOString(),
         endedAt: new Date(completedAt).toISOString(),
         durationMs: processingTimeMs,
-        detectorConfidence: Math.round((track.bbox.confidence ?? 0) * 100) / 100,
+        detectorConfidence: Math.round((evidence?.detectorConfidence ?? track.bbox.confidence ?? 0) * 100) / 100,
         detectorLatencyMs: track.stats?.lastDetectorLatencyMs ?? Math.round(runtimeMetricsRef.current.detectorLatencySamples > 0
           ? runtimeMetricsRef.current.detectorLatencyTotalMs / runtimeMetricsRef.current.detectorLatencySamples
           : 0),
-        trackConfidence: Math.round((track.trackConfidence ?? 0) * 100) / 100,
+        trackConfidence: Math.round((evidence?.trackConfidence ?? track.trackConfidence ?? 0) * 100) / 100,
         confidenceComponents: track.confidenceComponents,
-        ocrConfidence: Math.round(confidence * 100) / 100,
+        ocrConfidence: Math.round(resolvedConfidence * 100) / 100,
         ocrLatencyMs: track.stats?.lastOcrLatencyMs ?? Math.round(runtimeMetricsRef.current.ocrLatencySamples > 0
           ? runtimeMetricsRef.current.ocrLatencyTotalMs / runtimeMetricsRef.current.ocrLatencySamples
           : 0),
         consensusCount,
         matchType: resolvedMatchType,
         motionLevel: getMotionOcrMode(track),
-        cropQuality: Math.round((track.stats?.bestCropQuality ?? 0) * 100) / 100,
+        cropQuality: Math.round((evidence?.cropQuality ?? track.stats?.bestCropQuality ?? 0) * 100) / 100,
         processingTimeMs,
         reasonForCompletion:
-          resolvedMatchType === 'EXACT'
+          evidence?.reasonForCompletion ??
+          (resolvedMatchType === 'EXACT'
             ? 'DATABASE_EXACT_MATCH'
             : resolvedMatchType === 'POSSIBLE'
             ? 'DATABASE_POSSIBLE_MATCH'
-            : 'DATABASE_NO_MATCH',
+            : 'DATABASE_NO_MATCH'),
         deviceTier: runtimeMetricsRef.current.deviceTier,
         environment: runtimeMetricsRef.current.currentEnvironment,
         environmentConfidence: runtimeMetricsRef.current.currentEnvironmentConfidence,
@@ -3011,7 +3051,18 @@ export default function ScannerPage() {
         const alertSlotId = slotId || 'laptop-camera';
         setActiveAlertMatchesBySlot((prev) => ({
           ...prev,
-          [alertSlotId]: { vehicle: matchedVehicle, cameraName: scanCameraName, cameraId: alertSlotId },
+          [alertSlotId]: {
+            vehicle: matchedVehicle,
+            cameraName: scanCameraName,
+            cameraId: alertSlotId,
+            plate: resolvedPlate,
+            confidence: confidencePercent,
+            timestamp: newDetection.timestamp,
+            detectedAtIso: timestamp.toISOString(),
+            vehicleImageDataUrl: evidence?.vehicleImageDataUrl,
+            plateImageDataUrl: evidence?.plateImageDataUrl,
+            trackId: evidence?.trackId ?? track.trackId,
+          },
         }));
         playAlertChime();
       }
@@ -3022,6 +3073,340 @@ export default function ScannerPage() {
       track.cooldownStartedAt = Date.now();
     },
     [getCameraSlotLabelFromRefs, role]
+  );
+
+  const recognizeFinishedEvidence = useCallback(
+    async (
+      evidence: FinishedVehicleEvidence,
+      scannerSettings: ScannerSettings
+    ): Promise<FinalEvidenceOcrResult | null> => {
+      const track = evidence.trackSnapshot;
+      if (!track) return null;
+
+      const startedAt = performance.now();
+      let bestCandidate: FinalEvidenceOcrResult | null = null;
+      const candidateTrack = track;
+      let latencyRecorded = false;
+      const recordFinalOcrLatency = () => {
+        if (latencyRecorded) return;
+        latencyRecorded = true;
+        const elapsedMs = performance.now() - startedAt;
+        runtimeMetricsRef.current.ocrLatencyTotalMs += elapsedMs;
+        runtimeMetricsRef.current.ocrLatencySamples++;
+        pushBoundedMetricSample(runtimeMetricsRef.current.ocrLatencyHistoryMs, elapsedMs);
+      };
+
+      const rememberCandidate = (
+        plateText: string,
+        confidence: number,
+        score: number,
+        qualityWeight: number,
+        timestamp: number = Date.now()
+      ) => {
+        const normalized = cleanPlateNumber(plateText);
+        if (!normalized) return;
+
+        const { letters, digits } = countPlateChars(normalized);
+        if (letters === 0 || digits === 0) return;
+
+        const blendedScore = score;
+        if (confidence < EVIDENCE_FINAL_OCR_MIN_CONFIDENCE && blendedScore < EVIDENCE_FINAL_OCR_MIN_SCORE) return;
+
+        addOcrVoteToTrack(candidateTrack, normalized, Math.max(confidence, blendedScore), qualityWeight);
+        evidence.ocrCandidates.push({
+          plate: normalized,
+          confidence,
+          score: blendedScore,
+          timestamp,
+        });
+
+        const voteCount = getTrackVoteCount(candidateTrack);
+        const candidate: FinalEvidenceOcrResult = {
+          plate: normalized,
+          confidence: Math.max(confidence, blendedScore),
+          score: blendedScore,
+          voteCount,
+          consensusCount: voteCount,
+        };
+
+        if (!bestCandidate || candidate.score > bestCandidate.score) {
+          bestCandidate = candidate;
+        }
+      };
+
+      if (track.stabilizedPlate) {
+        rememberCandidate(
+          track.stabilizedPlate,
+          track.stabilizedConfidence ?? track.trackConfidence ?? 0,
+          track.stabilizedConfidence ?? track.trackConfidence ?? 0,
+          track.qualityScore ?? 0.7,
+          track.lastOcrCompletedAt ?? track.lastSeenTimestamp
+        );
+      }
+
+      evidence.ocrCandidates.forEach((candidate) => {
+        rememberCandidate(candidate.plate, candidate.confidence, candidate.score, evidence.bestPlateImage?.qualityScore ?? 0.7, candidate.timestamp);
+      });
+
+      if (isPpOcrReady()) {
+        const candidateSamples = evidence.plateImages.slice(0, EVIDENCE_FINAL_OCR_TOP_CROPS);
+
+        for (const sample of candidateSamples) {
+          const transientCanvases: HTMLCanvasElement[] = [];
+          try {
+            const variants = adaptiveConfigRef.current.processing.preprocessingVariants;
+            const adaptiveCrops = generateAdaptiveCrops(
+              sample.canvas,
+              { x: 0, y: 0, width: sample.canvas.width, height: sample.canvas.height, confidence: 1 },
+              440,
+              124,
+              variants
+            );
+            adaptiveCrops.forEach((crop) => {
+              transientCanvases.push(crop.canvas);
+              if (crop.topLineCanvas) transientCanvases.push(crop.topLineCanvas);
+              if (crop.bottomLineCanvas) transientCanvases.push(crop.bottomLineCanvas);
+            });
+
+            const fallbackCrop = {
+              canvas: sample.canvas,
+              isTwoLine: sample.canvas.width / Math.max(1, sample.canvas.height) < 2.3,
+            };
+            const cropCandidates = adaptiveCrops.length > 0
+              ? adaptiveCrops.slice(0, Math.max(2, adaptiveConfigRef.current.ocr.maxCandidateCrops))
+              : [fallbackCrop];
+            const expectedMinChars = getExpectedMinPlateChars(sample.canvas);
+
+            for (const crop of cropCandidates) {
+              await yieldToBrowser();
+              const result = await recognizePlateFromCanvas(crop.canvas, crop.isTwoLine);
+              const resultText = result.normalizedPlate || result.text;
+              const pattern = validateMalaysianPattern(resultText);
+              if (!isPlausiblePlateCandidate(resultText, expectedMinChars, pattern.score)) continue;
+
+              const score = scoreEvidenceFrameQuality({
+                ...sample.scoreComponents,
+                ocrConfidence: result.confidence,
+              });
+              rememberCandidate(resultText, result.confidence, score, sample.qualityScore, Date.now());
+              const currentBestCandidate = bestCandidate as FinalEvidenceOcrResult | null;
+
+              if (
+                currentBestCandidate &&
+                currentBestCandidate.confidence >= Math.max(scannerSettings.recognitionThreshold, 0.70) &&
+                currentBestCandidate.score >= 0.74 &&
+                canCommitFinalPlateOutcome(currentBestCandidate.plate, currentBestCandidate.voteCount)
+              ) {
+                break;
+              }
+            }
+          } finally {
+            transientCanvases.forEach(releaseCanvasMemory);
+          }
+        }
+      }
+
+      const voteCount = getTrackVoteCount(candidateTrack);
+      if (voteCount > 0) {
+        runtimeMetricsRef.current.consensusAttemptCount++;
+        const requiredVotes = voteCount >= EVIDENCE_FINAL_MIN_VOTES ? EVIDENCE_FINAL_MIN_VOTES : 1;
+        const confidenceGate = Math.min(
+          Math.max(scannerSettings.recognitionThreshold, EVIDENCE_FINAL_OCR_MIN_CONFIDENCE),
+          0.62
+        );
+        const consensus = evaluateConsensus(candidateTrack, requiredVotes, confidenceGate);
+
+        if (consensus.isStabilized && canCommitFinalPlateOutcome(consensus.normalizedPlate, consensus.voteCount)) {
+          const currentBestCandidate = bestCandidate as FinalEvidenceOcrResult | null;
+          recordFinalOcrLatency();
+          return {
+            plate: consensus.normalizedPlate,
+            confidence: consensus.confidence,
+            score: Math.max(consensus.confidence, currentBestCandidate?.score ?? 0),
+            voteCount: consensus.voteCount,
+            consensusCount: consensus.totalVotes,
+          };
+        }
+      }
+
+      recordFinalOcrLatency();
+
+      const currentBestCandidate = bestCandidate as FinalEvidenceOcrResult | null;
+      if (
+        currentBestCandidate &&
+        canCommitQuickDatabaseOutcome(
+          currentBestCandidate.plate,
+          currentBestCandidate.confidence,
+          currentBestCandidate.score,
+          currentBestCandidate.voteCount
+        )
+      ) {
+        return currentBestCandidate;
+      }
+
+      return null;
+    },
+    []
+  );
+
+  const processFinishedEvidence = useCallback(
+    async (
+      evidence: FinishedVehicleEvidence,
+      slotRuntime: SlotScannerRuntime,
+      sourceSlotId: string,
+      generation?: number
+    ) => {
+      const track = evidence.trackSnapshot;
+      if (!track) {
+        slotRuntime.evidenceBuffer.releaseFinishedEvidence(evidence);
+        return;
+      }
+
+      if (evidence.plateImages.length === 0 && !track.stabilizedPlate && getTrackVoteCount(track) === 0) {
+        slotRuntime.evidenceBuffer.releaseFinishedEvidence(evidence);
+        return;
+      }
+
+      activeOcrCount.current++;
+      runtimeMetricsRef.current.ocrAttemptCount++;
+      try {
+        const finalOcr = await recognizeFinishedEvidence(evidence, settingsRef.current);
+        if (!finalOcr) return;
+        if (generation !== undefined && generation !== evidenceQueueGenerationRef.current) return;
+
+        const evidencePayload: FinalEvidencePayload = {
+          trackId: evidence.trackId,
+          vehicleImageDataUrl: evidence.bestVehicleImage
+            ? canvasToJpegDataUrl(evidence.bestVehicleImage.canvas, 0.78)
+            : undefined,
+          plateImageDataUrl: evidence.bestPlateImage
+            ? canvasToJpegDataUrl(evidence.bestPlateImage.canvas, 0.9)
+            : undefined,
+          firstSeenAt: evidence.enteredTime,
+          lastSeenAt: evidence.lastSeen,
+          completedAt: Date.now(),
+          consensusCount: finalOcr.consensusCount,
+          cropQuality: evidence.bestPlateImage?.qualityScore,
+          detectorConfidence: evidence.bestPlateImage?.detectorConfidence ?? track.bbox.confidence,
+          trackConfidence: evidence.confidence ?? track.trackConfidence,
+          reasonForCompletion: 'DEFERRED_EVIDENCE_FINALIZATION',
+        };
+
+        await runDatabaseMatch(track, finalOcr.plate, finalOcr.confidence, sourceSlotId, {
+          alertOnly: true,
+          commitNoCase: true,
+          evidence: evidencePayload,
+        });
+      } catch (err) {
+        console.warn(`[Evidence:${sourceSlotId}] Final evidence processing failed:`, err);
+      } finally {
+        activeOcrCount.current = Math.max(0, activeOcrCount.current - 1);
+        slotRuntime.evidenceBuffer.releaseFinishedEvidence(evidence);
+      }
+    },
+    [recognizeFinishedEvidence, runDatabaseMatch]
+  );
+
+  const updateEvidenceQueueMetrics = useCallback(() => {
+    const depth = evidenceQueueRef.current.length + evidenceWorkersActiveRef.current;
+    runtimeMetricsRef.current.lastOcrQueueDepth = depth;
+    runtimeMetricsRef.current.maxOcrQueueDepth = Math.max(runtimeMetricsRef.current.maxOcrQueueDepth, depth);
+  }, []);
+
+  const getEvidenceWorkerLimit = useCallback(() => {
+    return Math.max(
+      1,
+      Math.min(
+        EVIDENCE_QUEUE_WORKER_LIMIT,
+        getTierOcrConcurrencyLimit(runtimeMetricsRef.current.deviceTier),
+        adaptiveConfigRef.current.ocr.maxConcurrency,
+        Math.max(1, settingsRef.current.maxOcrConcurrency || INITIAL_SETTINGS.maxOcrConcurrency)
+      )
+    );
+  }, []);
+
+  const drainEvidenceQueue = useCallback(() => {
+    if (evidenceDrainScheduledRef.current) return;
+    evidenceDrainScheduledRef.current = true;
+
+    const runDrain = () => {
+      evidenceDrainScheduledRef.current = false;
+      const workerLimit = getEvidenceWorkerLimit();
+      const activeGeneration = evidenceQueueGenerationRef.current;
+
+      while (
+        evidenceQueueRef.current.length > 0 &&
+        evidenceWorkersActiveRef.current < workerLimit &&
+        activeOcrCount.current < workerLimit
+      ) {
+        const job = evidenceQueueRef.current.shift();
+        if (!job) break;
+
+        if (job.generation !== activeGeneration) {
+          job.slotRuntime.evidenceBuffer.releaseFinishedEvidence(job.evidence);
+          continue;
+        }
+
+        evidenceWorkersActiveRef.current++;
+        updateEvidenceQueueMetrics();
+
+        void (async () => {
+          try {
+            await processFinishedEvidence(job.evidence, job.slotRuntime, job.sourceSlotId, job.generation);
+          } finally {
+            evidenceWorkersActiveRef.current = Math.max(0, evidenceWorkersActiveRef.current - 1);
+            updateEvidenceQueueMetrics();
+            if (evidenceQueueRef.current.length > 0) {
+              drainEvidenceQueueRef.current();
+            }
+          }
+        })();
+      }
+
+      updateEvidenceQueueMetrics();
+
+      if (evidenceQueueRef.current.length > 0) {
+        window.setTimeout(() => drainEvidenceQueueRef.current(), activeOcrCount.current >= workerLimit ? 120 : 0);
+      }
+    };
+
+    window.setTimeout(runDrain, 0);
+  }, [getEvidenceWorkerLimit, processFinishedEvidence, updateEvidenceQueueMetrics]);
+
+  useEffect(() => {
+    drainEvidenceQueueRef.current = drainEvidenceQueue;
+  }, [drainEvidenceQueue]);
+
+  const enqueueFinishedEvidence = useCallback(
+    (evidence: FinishedVehicleEvidence, slotRuntime: SlotScannerRuntime, sourceSlotId: string) => {
+      const job: EvidenceProcessingJob = {
+        id: `evidence-${Date.now()}-${evidenceJobCounterRef.current++}`,
+        evidence,
+        slotRuntime,
+        sourceSlotId,
+        enqueuedAt: Date.now(),
+        generation: evidenceQueueGenerationRef.current,
+      };
+
+      evidenceQueueRef.current.push(job);
+      evidenceQueueRef.current.sort((left, right) => {
+        const rightScore = right.evidence.bestPlateImage?.score ?? right.evidence.confidence ?? 0;
+        const leftScore = left.evidence.bestPlateImage?.score ?? left.evidence.confidence ?? 0;
+        if (Math.abs(rightScore - leftScore) > 0.01) return rightScore - leftScore;
+        return left.enqueuedAt - right.enqueuedAt;
+      });
+
+      while (evidenceQueueRef.current.length > EVIDENCE_QUEUE_MAX_SIZE) {
+        const dropped = evidenceQueueRef.current.pop();
+        if (!dropped) break;
+        dropped.slotRuntime.evidenceBuffer.releaseFinishedEvidence(dropped.evidence);
+        runtimeMetricsRef.current.ocrSkippedQueuePressureCount++;
+      }
+
+      updateEvidenceQueueMetrics();
+      drainEvidenceQueue();
+    },
+    [drainEvidenceQueue, updateEvidenceQueueMetrics]
   );
 
   const queueEnvironmentSample = useCallback(
@@ -3070,6 +3455,10 @@ export default function ScannerPage() {
               runtime.bestFrameSelector.configure({
                 maxBufferSize: nextConfig.buffer.maxSize,
                 maxEntryAgeMs: nextConfig.buffer.maxEntryAgeMs,
+              });
+              runtime.evidenceBuffer.configure({
+                maxPlateImagesPerTrack: nextConfig.buffer.maxSize,
+                maxTrackAgeMs: Math.max(nextConfig.buffer.maxEntryAgeMs * 2, 8000),
               });
             });
 
@@ -3274,6 +3663,17 @@ export default function ScannerPage() {
         }));
 
         const allTracks = runtime.tracker.updateTracks(bboxList);
+        const removedTracks = runtime.tracker.consumeRemovedTracks();
+        removedTracks.forEach((removedTrack) => {
+          if (!removedTrack.isConfirmed) return;
+          const finishedEvidence = runtime.evidenceBuffer.finishTrack(removedTrack, {
+            cameraId: slotId || 'laptop-camera',
+            cameraName: getCameraSlotLabelFromRefs(slotId),
+          });
+          if (finishedEvidence) {
+            enqueueFinishedEvidence(finishedEvidence, runtime, slotId);
+          }
+        });
         const confirmedTracks = runtime.tracker.getActiveTracks(true);
         const readableConfirmedTracks = confirmedTracks.filter(isTrackAvailableForReading);
         const displayTracks = (scannerSettings.debugMode ? allTracks : confirmedTracks).filter(isTrackDrawable);
@@ -3302,6 +3702,7 @@ export default function ScannerPage() {
           const activeTrackNumbers = new Set(allTracks.map((track) => track.trackNumber));
           runtime.bestFrameSelector.clearExcept(activeTrackNumbers);
           runtime.bestFrameSelector.pruneStale(undefined, activeTrackNumbers, loopNow);
+          runtime.evidenceBuffer.pruneStale(loopNow);
           pruneCooldownMap(cooldownMap.current, scannerSettings.duplicateCooldown * 1000, loopNow);
           runtime.lastMaintenanceTs = loopNow;
         }
@@ -3359,6 +3760,21 @@ export default function ScannerPage() {
             trackStability: track.trackConfidence ?? 0.55,
             perspectiveScore,
           });
+          const evidenceMetadata = {
+            cameraId: slotId || 'laptop-camera',
+            cameraName: getCameraSlotLabelFromRefs(slotId),
+          };
+          const evidenceOptions = {
+            qualityScore: cropQuality.overallScore,
+            detectorConfidence: sourceBbox.confidence,
+            ocrConfidence: track.stabilizedConfidence ?? 0,
+            trackConfidence: track.trackConfidence ?? 0.55,
+            perspectiveScore,
+          };
+          if (cropCanvas.width > 0 && cropCanvas.height > 0) {
+            runtime.evidenceBuffer.addPlateSample(track, cropCanvas, sourceBbox, evidenceMetadata, evidenceOptions);
+          }
+          runtime.evidenceBuffer.addVehicleContextSample(track, video, sourceBbox, evidenceMetadata, evidenceOptions);
           const nextBestId = runtime.bestFrameSelector.getBestCrop(track.trackNumber)?.id;
           if (previousBestId && nextBestId && previousBestId !== nextBestId) {
             runtimeMetricsRef.current.bestFrameReplacementCount++;
@@ -3477,10 +3893,12 @@ export default function ScannerPage() {
           activeOcrCount.current,
           maxOcrConcurrency
         );
-        runtimeMetricsRef.current.lastOcrQueueDepth = priorityIds.length;
+        const combinedOcrQueueDepth =
+          priorityIds.length + evidenceQueueRef.current.length + evidenceWorkersActiveRef.current;
+        runtimeMetricsRef.current.lastOcrQueueDepth = combinedOcrQueueDepth;
         runtimeMetricsRef.current.maxOcrQueueDepth = Math.max(
           runtimeMetricsRef.current.maxOcrQueueDepth,
-          priorityIds.length
+          combinedOcrQueueDepth
         );
         runtimeMetricsRef.current.tracksWaitingForBetterCrop = 0;
 
@@ -3488,6 +3906,7 @@ export default function ScannerPage() {
           const trackId = priorityIds[priorityIndex];
           const track = slotRuntime.tracker.getTrack(trackId);
           if (!track || !track.isConfirmed || track.cooldownActive) continue;
+          if (track.stabilizedPlate && getTrackVoteCount(track) >= EVIDENCE_FINAL_MIN_VOTES) continue;
           if (track.ocrRunning || track.ocrJobQueued) {
             runtimeMetricsRef.current.duplicateOcrSkippedCount++;
             continue;
@@ -3863,21 +4282,25 @@ export default function ScannerPage() {
                   const matchConfidence = Math.max(consensus.confidence, Math.min(0.98, bestScore));
                   updatedTrack.stabilizedPlate = consensus.normalizedPlate;
                   updatedTrack.stabilizedConfidence = matchConfidence;
-                  const noMatchOutcomeReady = canCommitNoMatchOutcome(
-                    consensus.normalizedPlate,
-                    matchConfidence,
-                    bestScore,
-                    consensus.voteCount
-                  );
-                  await runDatabaseMatch(updatedTrack, consensus.normalizedPlate, matchConfidence, sourceSlotId, {
-                    commitNoCase: noMatchOutcomeReady,
+                  updatedTrack.ocrState = 'CONSENSUS_BUILDING';
+                  updatedTrack.pipelineState = 'CONSENSUS';
+                  slotRuntime.evidenceBuffer.addOcrCandidate(updatedTrack.trackId, {
+                    plate: consensus.normalizedPlate,
+                    confidence: matchConfidence,
+                    score: Math.max(matchConfidence, bestScore),
+                    timestamp: Date.now(),
                   });
                 } else if (canCommitQuickDatabaseOutcome(text, conf, bestScore, acceptedVoteCount)) {
                   const quickMatchConfidence = Math.max(conf, Math.min(0.98, bestScore));
                   updatedTrack.stabilizedPlate = text;
                   updatedTrack.stabilizedConfidence = quickMatchConfidence;
-                  await runDatabaseMatch(updatedTrack, text, quickMatchConfidence, sourceSlotId, {
-                    commitNoCase: canCommitNoMatchOutcome(text, quickMatchConfidence, bestScore, acceptedVoteCount),
+                  updatedTrack.ocrState = 'CONSENSUS_BUILDING';
+                  updatedTrack.pipelineState = 'CONSENSUS';
+                  slotRuntime.evidenceBuffer.addOcrCandidate(updatedTrack.trackId, {
+                    plate: text,
+                    confidence: quickMatchConfidence,
+                    score: Math.max(quickMatchConfidence, bestScore),
+                    timestamp: Date.now(),
                   });
                 }
               } else if (updatedTrack.votes.size === 0) {
@@ -3985,14 +4408,15 @@ export default function ScannerPage() {
   }, [
     cameraSlots,
     collectDatasetSample,
+    enqueueFinishedEvidence,
     ensureSlotMetrics,
     flushScannerMetrics,
+    getCameraSlotLabelFromRefs,
     getSlotRuntime,
     isCameraReady,
     isScanning,
     previewSlotIds,
     queueEnvironmentSample,
-    runDatabaseMatch,
     scannerProcessingPaused,
     supportsMultiCameraScan,
   ]);
@@ -4018,7 +4442,7 @@ export default function ScannerPage() {
       const { x, y, width: boxWidth, height: boxHeight } = track.smoothBbox;
       const color = getTrackColor(track);
       const plateText = getTrackPlateText(track);
-      const label = plateText || (track.matchType ? getTrackStatusLabel(track) : '');
+      const label = showGuide ? plateText || (track.matchType ? getTrackStatusLabel(track) : '') : '';
       const angle = track.overlayAngle ?? 0;
       const cx = x + boxWidth / 2;
       const cy = y + boxHeight / 2;
@@ -4323,7 +4747,6 @@ export default function ScannerPage() {
     ? 'Imbasan disambung semula.'
     : 'Scanning has resumed.';
   const scannerControlBusy = scannerReloadActive || scannerProcessingPaused;
-  const visibleTrack = tracksList.find((track) => getTrackPlateText(track)) || tracksList[0] || null;
   const activeScanTileCount = supportsMultiCameraScan
     ? cameraSlots.filter((slot) => previewSlotIds.includes(slot.id)).length
     : previewSlotIds.includes(activeCameraSlotId)
@@ -4340,9 +4763,9 @@ export default function ScannerPage() {
     : cameraError
     ? 'Camera unavailable'
     : isScanning && runtimeReady && supportsMultiCameraScan
-    ? `Scanning ${activeScanTileCount || 1} camera${(activeScanTileCount || 1) === 1 ? '' : 's'}${visibleTrack ? ` - ${getTrackStatusLabel(visibleTrack)}` : ''}`
+    ? `Scanning ${activeScanTileCount || 1} camera${(activeScanTileCount || 1) === 1 ? '' : 's'}`
     : isScanning && runtimeReady
-    ? `Scanning selected camera${visibleTrack ? ` - ${getTrackStatusLabel(visibleTrack)}` : ''}`
+    ? 'Scanning selected camera'
     : isScanning
     ? 'AI models warming up'
     : previewSlotIds.length > 0
@@ -4421,14 +4844,18 @@ export default function ScannerPage() {
       : language === 'BM'
       ? 'Tiada padanan'
       : 'No match'
+    : isScanning
+    ? language === 'BM'
+      ? 'Sedang mengimbas'
+      : 'Scanning'
     : language === 'BM'
-    ? 'Belum ada imbasan'
-    : 'No scans yet';
+    ? 'Tiada amaran'
+    : 'No alerts';
   const simpleLastResultDetail = latestDetection
     ? `${latestDetection.plate} · ${latestDetection.confidence}%`
     : language === 'BM'
-    ? 'Keputusan akan dipaparkan selepas plat dikesan.'
-    : 'Results will appear after a plate is detected.';
+    ? 'Menunggu padanan pangkalan data.'
+    : 'Waiting for a database match.';
   const recentDetectionByPlate = new Map<string, SessionDetection>();
   liveDetections.forEach((detection) => {
     const normalized = cleanPlateNumber(detection.plate);
@@ -4436,8 +4863,8 @@ export default function ScannerPage() {
       recentDetectionByPlate.set(normalized, detection);
     }
   });
-  const activeSeenPlateItems: SeenPlateItem[] = tracksList
-    .map((track) => {
+  const activeSeenPlateItems: SeenPlateItem[] = showDeveloperOverlay
+    ? tracksList.map((track) => {
       const plate = cleanPlateNumber(getTrackPlateText(track));
       if (!plate) return null;
 
@@ -4474,10 +4901,12 @@ export default function ScannerPage() {
         active: true,
       };
     })
-    .filter((item): item is SeenPlateItem => Boolean(item));
+    .filter((item): item is SeenPlateItem => Boolean(item))
+    : [];
   const activeSeenPlateKeys = new Set(activeSeenPlateItems.map((item) => item.plate));
   const recentSeenPlateItems: SeenPlateItem[] = liveDetections
     .filter((detection) => !activeSeenPlateKeys.has(cleanPlateNumber(detection.plate)))
+    .filter((detection) => showDeveloperOverlay || detection.matchType === 'EXACT' || detection.matched)
     .map((detection) => {
       const tone = getDetectionSeenPlateTone(detection);
       const matchedVehicle = detection.vehicleId
@@ -4728,8 +5157,8 @@ export default function ScannerPage() {
             {[
               [language === 'BM' ? 'Kamera' : 'Camera', activeCameraLabel],
               [language === 'BM' ? 'Keadaan' : 'Status', simpleScannerStatus],
-              [language === 'BM' ? 'Keputusan Terkini' : 'Latest Result', simpleLastResult],
-              [language === 'BM' ? 'Jumlah Sesi' : 'Session Scans', liveDetections.length.toString()],
+              [language === 'BM' ? 'Amaran Padanan' : 'Match Alert', simpleLastResult],
+              [language === 'BM' ? 'Amaran Sesi' : 'Session Alerts', liveDetections.length.toString()],
             ].map(([label, value]) => (
               <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-3 sm:py-2.5">
                 <div className="truncate text-[10px] font-bold uppercase text-slate-500">{label}</div>
@@ -5004,12 +5433,12 @@ export default function ScannerPage() {
                   </button>
                 )}
                 {isAlertSlot && activeSlotAlert && (
-                  <div className="scanner-alert-card absolute inset-1.5 z-30 bg-red-600 border-2 border-red-400 rounded-xl p-2.5 sm:p-4 shadow-2xl flex flex-col justify-between text-center overflow-hidden">
+                  <div className="scanner-alert-card absolute inset-1.5 z-30 overflow-y-auto rounded-xl border-2 border-red-400 bg-red-600 p-2.5 text-left shadow-2xl sm:p-4">
                     <div className="flex items-center justify-between border-b border-red-500/80 pb-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <ShieldAlert className="w-4 h-4 text-white animate-bounce shrink-0" />
                         <span className="text-[10px] sm:text-xs font-black uppercase text-white tracking-wider truncate">
-                          {language === 'BM' ? 'AMARAN: PADANAN DIKESAN' : 'ALERT: MATCH DETECTED'}
+                          {language === 'BM' ? 'AMARAN: KENDERAAN DEBTOR' : 'ALERT: DEBTOR VEHICLE'}
                         </span>
                       </div>
                       <button
@@ -5029,12 +5458,62 @@ export default function ScannerPage() {
                       </button>
                     </div>
 
-                    <div className="bg-red-700 border border-red-400/50 rounded-lg p-2.5 sm:p-3 space-y-2 text-left shadow-inner">
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[1.4fr_0.8fr]">
+                      <div className="relative overflow-hidden rounded-lg border border-red-400/60 bg-red-800/55">
+                        {activeSlotAlert.vehicleImageDataUrl ? (
+                          <Image
+                            unoptimized
+                            src={activeSlotAlert.vehicleImageDataUrl}
+                            alt={language === 'BM' ? 'Imej kenderaan' : 'Vehicle evidence'}
+                            fill
+                            sizes="(max-width: 640px) 90vw, 420px"
+                            className="object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-28 items-center justify-center text-[10px] font-bold uppercase text-red-100 sm:h-36">
+                            {language === 'BM' ? 'Imej kenderaan' : 'Vehicle image'}
+                          </div>
+                        )}
+                        {activeSlotAlert.vehicleImageDataUrl && <div className="h-28 sm:h-36" />}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="relative overflow-hidden rounded-lg border border-red-400/60 bg-slate-950">
+                          {activeSlotAlert.plateImageDataUrl ? (
+                            <Image
+                              unoptimized
+                              src={activeSlotAlert.plateImageDataUrl}
+                              alt={language === 'BM' ? 'Potongan plat' : 'Plate crop'}
+                              fill
+                              sizes="180px"
+                              className="object-contain p-1"
+                            />
+                          ) : (
+                            <div className="flex h-16 items-center justify-center text-[10px] font-bold uppercase text-red-100">
+                              {language === 'BM' ? 'Potongan plat' : 'Plate crop'}
+                            </div>
+                          )}
+                          {activeSlotAlert.plateImageDataUrl && <div className="h-16" />}
+                        </div>
+                        <div className="rounded-lg border border-red-400/60 bg-red-700 px-2.5 py-2">
+                          <span className="text-[9px] text-red-100 font-bold uppercase block">{t('plateNumber')}</span>
+                          <span className="plate-yellow text-lg sm:text-xl font-mono font-black">
+                            {activeSlotAlert.plate}
+                          </span>
+                          <div className="mt-1 font-mono text-[10px] font-bold text-red-100">
+                            {activeSlotAlert.confidence}% · {activeSlotAlert.timestamp}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2 bg-red-700 border border-red-400/50 rounded-lg p-2.5 sm:p-3 space-y-2 text-left shadow-inner">
                       <div className="grid grid-cols-2 gap-2 border-b border-red-500/80 pb-2">
                         <div>
-                          <span className="text-[9px] text-red-100 font-bold uppercase block">{t('plateNumber')}</span>
-                          <span className="plate-yellow text-base sm:text-xl font-mono font-black">
-                            {activeSlotAlert.vehicle.plate}
+                          <span className="text-[9px] text-red-100 font-bold uppercase block">
+                            {language === 'BM' ? 'Pemilik' : 'Matched'}
+                          </span>
+                          <span className="text-sm sm:text-base font-black text-white">
+                            {activeSlotAlert.vehicle.customerName}
                           </span>
                         </div>
                         <div>
@@ -5056,10 +5535,14 @@ export default function ScannerPage() {
                           <span className="text-red-100 block">{language === 'BM' ? 'Kamera' : 'Camera'}</span>
                           <strong className="text-white truncate block">{activeSlotAlert.cameraName}</strong>
                         </div>
+                        <div>
+                          <span className="text-red-100 block">{language === 'BM' ? 'Warna' : 'Colour'}</span>
+                          <strong className="text-white truncate block">{activeSlotAlert.vehicle.colour}</strong>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-center gap-1.5 pt-2 border-t border-red-500/80">
+                    <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 border-t border-red-500/80 pt-2">
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
@@ -5147,15 +5630,14 @@ export default function ScannerPage() {
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
-                  {language === 'BM' ? 'Plat Dilihat' : 'Seen Plates'}
+                  {language === 'BM' ? 'Amaran Padanan' : 'Match Alerts'}
                 </div>
                 <div className="truncate text-[11px] font-semibold text-slate-400">
-                  {activeSeenPlateItems.length} {language === 'BM' ? 'aktif' : 'active'} · {liveDetections.length}{' '}
-                  {language === 'BM' ? 'keputusan sesi' : 'session results'}
+                  {liveDetections.length} {language === 'BM' ? 'amaran sesi' : 'session alerts'}
                 </div>
               </div>
               <span className="shrink-0 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black text-slate-300">
-                {tracksList.length}
+                {liveDetections.length}
               </span>
             </div>
 
@@ -5346,11 +5828,11 @@ export default function ScannerPage() {
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-cyan-400" />
             <h2 className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
-              {t('recentDetectionList')}
+              {language === 'BM' ? 'Amaran Padanan' : 'Match Alerts'}
             </h2>
           </div>
           <span className="text-[10px] font-mono text-slate-500">
-            {liveDetections.length} session scans
+            {liveDetections.length} {language === 'BM' ? 'amaran sesi' : 'session alerts'}
           </span>
         </div>
 
@@ -5423,7 +5905,9 @@ export default function ScannerPage() {
               </button>
             ))
           ) : (
-            <div className="py-5 text-center text-xs text-slate-500">No scans in this session yet.</div>
+            <div className="py-5 text-center text-xs text-slate-500">
+              {language === 'BM' ? 'Tiada amaran padanan dalam sesi ini.' : 'No match alerts in this session.'}
+            </div>
           )}
         </div>
 
@@ -5488,7 +5972,7 @@ export default function ScannerPage() {
               ) : (
                 <tr>
                   <td colSpan={5} className="py-8 text-center text-slate-500 font-sans">
-                    No scans in this session yet. Start scanning to populate dashboard and audit history.
+                    {language === 'BM' ? 'Sedang menunggu padanan pangkalan data.' : 'Waiting for a database match.'}
                   </td>
                 </tr>
               )}
