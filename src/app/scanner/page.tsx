@@ -851,13 +851,13 @@ function classifyDeviceTier(
 function getTierDetectorTargetMs(tier: DeviceTier): number {
   switch (tier) {
     case 'A':
-      return 90;
+      return 60;   // ↓ was 90ms — ~16fps detection cadence
     case 'B':
-      return 160;
+      return 110;  // ↓ was 160ms
     case 'C':
-      return 280;
+      return 220;  // ↓ was 280ms
     case 'D':
-      return 480;
+      return 420;  // ↓ was 480ms
     default:
       return DETECTION_TARGET_INTERVAL_MS;
   }
@@ -868,11 +868,11 @@ function getTierDetectorBusyIntervalMs(tier: DeviceTier): number {
     case 'A':
       return DETECTION_BUSY_INTERVAL_MS;
     case 'B':
-      return 240;
+      return 180;  // ↓ was 240ms
     case 'C':
-      return 420;
+      return 340;  // ↓ was 420ms
     case 'D':
-      return 700;
+      return 600;  // ↓ was 700ms
     default:
       return DETECTION_BUSY_INTERVAL_MS;
   }
@@ -881,10 +881,11 @@ function getTierDetectorBusyIntervalMs(tier: DeviceTier): number {
 function getTierOcrConcurrencyLimit(tier: DeviceTier): number {
   switch (tier) {
     case 'A':
-      return 3;
+      return 4;  // ↑ was 3 — more parallel OCR jobs on fast devices
     case 'B':
+      return 3;  // ↑ was 2
     case 'C':
-      return 2;
+      return 2;  // ↑ was same
     default:
       return 1;
   }
@@ -1107,15 +1108,17 @@ const SCAN_LOCATIONS: ScanLocation[] = [
 ];
 
 const RECENT_DETECTIONS_STORAGE_KEY = 'track_recent_live_detections';
-const DETECTION_TARGET_INTERVAL_MS = 90;
-const DETECTION_BUSY_INTERVAL_MS = 125;
-const DETECTION_MIN_DELAY_MS = 16;
+const DETECTION_TARGET_INTERVAL_MS = 65;    // ↓ was 90ms — faster frame polling
+const DETECTION_BUSY_INTERVAL_MS = 100;    // ↓ was 125ms — tighter busy loop
+const DETECTION_MIN_DELAY_MS = 12;         // ↓ was 16ms — min scheduling gap
 const DETECTOR_VALIDATION_INTERVAL_MS = 2000;
-const CROP_SAMPLE_FAST_MS = 90;
-const CROP_SAMPLE_NORMAL_MS = 160;
-const OCR_FIRST_READ_RETRY_MS = 80;
-const OCR_REPEAT_READ_RETRY_MS = 180;
-const OCR_MIN_TRACK_FRAMES = 2;
+const CROP_SAMPLE_FAST_MS = 65;            // ↓ was 90ms — crop at high confidence faster
+const CROP_SAMPLE_NORMAL_MS = 110;         // ↓ was 160ms — normal crop sampling faster
+const OCR_FIRST_READ_RETRY_MS = 45;        // ↓ was 80ms — attempt first OCR sooner
+const OCR_REPEAT_READ_RETRY_MS = 120;      // ↓ was 180ms — retry OCR sooner
+const OCR_MIN_TRACK_FRAMES = 2;            // kept at 2 — adaptive bypass added in processOcrQueue
+const OCR_FAST_FIRST_FRAME_QUALITY_GATE = 0.80; // bypass 2-frame wait if crop quality is this high
+const OCR_HIGH_CONF_EARLY_EXIT = 0.97;     // skip remaining OCR crops when confidence exceeds this
 const OCR_MIN_BUFFERED_CROPS = 1;
 const OCR_FIRST_READ_MIN_TRACK_CONFIDENCE = 0.56;
 const OCR_MIN_TRACK_CONFIDENCE = 0.70;
@@ -1516,26 +1519,39 @@ function shouldSkipTrackForOcrPressure(
 function getMotionAwareDetectorTargetMs(
   adaptiveConfig: AdaptiveScannerConfig,
   tier: DeviceTier,
-  tracks: ActiveTrack[]
+  tracks: ActiveTrack[],
+  avgDetectorLatencyMs = 0
 ): number {
   const tierTarget = getTierDetectorTargetMs(tier);
   const peakMotion = tracks.reduce((max, track) => Math.max(max, track.motionScore ?? 0), 0);
   const movingEnvironment = adaptiveConfig.environment.label === 'HIGHWAY' || adaptiveConfig.environment.label === 'TRAFFIC';
   const parkedEnvironment = adaptiveConfig.environment.label === 'PARKING';
 
+  // Adaptive floor: run as fast as the hardware actually allows.
+  // Target = max(latency × 1.2, absolute hardware minimum).
+  // Capped at the tier target so we never go slower than the tier baseline.
+  const ADAPTIVE_LATENCY_MULTIPLIER = 1.2;
+  const ADAPTIVE_MIN_FLOOR_MS = DETECTION_MIN_DELAY_MS; // hard lower bound
+  const latencyFloor =
+    avgDetectorLatencyMs > 0
+      ? Math.max(ADAPTIVE_MIN_FLOOR_MS, Math.round(avgDetectorLatencyMs * ADAPTIVE_LATENCY_MULTIPLIER))
+      : ADAPTIVE_MIN_FLOOR_MS;
+  // Use the smaller of latencyFloor and tierTarget as the effective minimum.
+  const effectiveMin = Math.min(latencyFloor, tierTarget);
+
   if (movingEnvironment || peakMotion >= MOTION_UNSTABLE_MAX) {
-    return Math.max(DETECTION_MIN_DELAY_MS, Math.min(adaptiveConfig.detector.targetIntervalMs, Math.round(tierTarget * 0.72)));
+    return Math.max(effectiveMin, Math.min(adaptiveConfig.detector.targetIntervalMs, Math.round(tierTarget * 0.72)));
   }
 
   if (peakMotion >= MOTION_NORMAL_MAX) {
-    return Math.max(DETECTION_MIN_DELAY_MS, Math.min(tierTarget, adaptiveConfig.detector.targetIntervalMs));
+    return Math.max(effectiveMin, Math.min(tierTarget, adaptiveConfig.detector.targetIntervalMs));
   }
 
   if (parkedEnvironment && tracks.length > 0) {
     return Math.max(adaptiveConfig.detector.targetIntervalMs, Math.round(tierTarget * 1.25));
   }
 
-  return Math.max(adaptiveConfig.detector.targetIntervalMs, tierTarget);
+  return Math.max(effectiveMin, Math.max(adaptiveConfig.detector.targetIntervalMs, tierTarget));
 }
 
 function getMotionAwareCropSampleIntervalMs(
@@ -3191,6 +3207,16 @@ export default function ScannerPage() {
               rememberCandidate(resultText, result.confidence, score, sample.qualityScore, Date.now());
               const currentBestCandidate = bestCandidate as FinalEvidenceOcrResult | null;
 
+              // Early exit: if we already have an extremely high-confidence read
+              // there is no point running further OCR crops — skip the remaining work.
+              if (
+                currentBestCandidate &&
+                currentBestCandidate.confidence >= OCR_HIGH_CONF_EARLY_EXIT &&
+                canCommitFinalPlateOutcome(currentBestCandidate.plate, currentBestCandidate.voteCount)
+              ) {
+                break;
+              }
+
               if (
                 currentBestCandidate &&
                 currentBestCandidate.confidence >= Math.max(scannerSettings.recognitionThreshold, 0.70) &&
@@ -3793,10 +3819,15 @@ export default function ScannerPage() {
         processOcrQueue(readableConfirmedTracks, processingCanvas, scannerSettings, runtime, slotId);
         metrics.detFrames++;
 
+        const avgDetectorLatencyForInterval =
+          runtimeMetricsRef.current.detectorLatencySamples > 0
+            ? runtimeMetricsRef.current.detectorLatencyTotalMs / runtimeMetricsRef.current.detectorLatencySamples
+            : 0;
         const motionAwareTargetMs = getMotionAwareDetectorTargetMs(
           adaptiveConfigRef.current,
           runtimeMetricsRef.current.deviceTier,
-          readableConfirmedTracks
+          readableConfirmedTracks,
+          avgDetectorLatencyForInterval
         );
         const latencyDrivenInterval = clampNumber(
           Math.round(detectorElapsedMs * 1.45),
@@ -3846,9 +3877,37 @@ export default function ScannerPage() {
           return;
         }
 
+        // --- Adaptive OCR concurrency ---
+        // Start from the tier ceiling, then back off based on live pressure signals
+        // so weaker devices don't hit 100% CPU while the detector stalls.
+        const tierConcurrencyLimit = getTierOcrConcurrencyLimit(runtimeMetricsRef.current.deviceTier);
+        const runtimeMetricsNow = runtimeMetricsRef.current;
+        const avgDetectorLatencyMs =
+          runtimeMetricsNow.detectorLatencySamples > 0
+            ? runtimeMetricsNow.detectorLatencyTotalMs / runtimeMetricsNow.detectorLatencySamples
+            : 0;
+        const tierTargetMs = getTierDetectorTargetMs(runtimeMetricsNow.deviceTier);
+        // If detector is already struggling (avg > 1.5× its target), cap workers at 2
+        const latencyPressureLimit =
+          avgDetectorLatencyMs > 0 && avgDetectorLatencyMs > tierTargetMs * 1.5
+            ? 2
+            : tierConcurrencyLimit;
+        // Estimate queue depth from confirmed tracks (priorityIds not yet computed at this point)
+        const currentQueueDepth = confirmedTracks.length;
+        const queuePressureNow = getOcrQueuePressure(
+          currentQueueDepth,
+          activeOcrCount.current,
+          tierConcurrencyLimit
+        );
+        // Back off further when queue is critically backed up
+        const queuePressureLimit =
+          queuePressureNow === 'CRITICAL' ? 2
+          : queuePressureNow === 'LARGE'  ? Math.max(2, tierConcurrencyLimit - 1)
+          : tierConcurrencyLimit;
         const maxOcrConcurrency = Math.min(
           OCR_MAX_CONCURRENCY,
-          getTierOcrConcurrencyLimit(runtimeMetricsRef.current.deviceTier),
+          latencyPressureLimit,
+          queuePressureLimit,
           adaptiveConfig.ocr.maxConcurrency,
           Math.max(1, scannerSettings.maxOcrConcurrency || INITIAL_SETTINGS.maxOcrConcurrency)
         );
@@ -3869,22 +3928,46 @@ export default function ScannerPage() {
           const rightTrack = slotRuntime.tracker.getTrack(rightId);
           if (!leftTrack || !rightTrack) return 0;
 
-          if (adaptiveConfig.track.prioritizeHighestConfidence) {
-            const leftConfidence = (leftTrack.trackConfidence ?? 0) + (leftTrack.bbox.confidence ?? 0);
-            const rightConfidence = (rightTrack.trackConfidence ?? 0) + (rightTrack.bbox.confidence ?? 0);
-            if (Math.abs(leftConfidence - rightConfidence) > 0.05) return rightConfidence - leftConfidence;
-          }
+          const now = Date.now();
 
-          const leftVotes = getTrackVoteCount(leftTrack);
+          // --- Composite priority score (higher = process first) ---
+          // 45% combined detector + track confidence
+          // 25% urgency: time since last OCR attempt (stale = urgent)
+          // 20% crop quality score
+          // 10% OCR confidence from previous reads
+          const computePriority = (track: ActiveTrack): number => {
+            const confScore =
+              ((track.trackConfidence ?? 0) + (track.bbox.confidence ?? 0)) / 2; // 0‥1
+
+            const msSinceAttempt = track.lastOcrAttemptAt
+              ? now - track.lastOcrAttemptAt
+              : 9999; // never attempted = most urgent
+            // Normalise to 0‥1 over a 2-second window
+            const urgencyScore = Math.min(1, msSinceAttempt / 2000);
+
+            const qualityScore = track.qualityScore ?? 0; // 0‥1
+
+            const ocrConfScore = track.stabilizedConfidence ?? 0; // 0‥1
+
+            return (
+              confScore    * 0.45 +
+              urgencyScore * 0.25 +
+              qualityScore * 0.20 +
+              ocrConfScore * 0.10
+            );
+          };
+
+          const leftPriority  = computePriority(leftTrack);
+          const rightPriority = computePriority(rightTrack);
+
+          // Descending: highest priority first
+          if (Math.abs(leftPriority - rightPriority) > 0.02) return rightPriority - leftPriority;
+
+          // Tiebreak: prefer tracks that have never been read
+          const leftVotes  = getTrackVoteCount(leftTrack);
           const rightVotes = getTrackVoteCount(rightTrack);
           if (leftVotes === 0 && rightVotes > 0) return -1;
           if (rightVotes === 0 && leftVotes > 0) return 1;
-
-          const leftLastAttempt = leftTrack.lastOcrAttemptAt ?? 0;
-          const rightLastAttempt = rightTrack.lastOcrAttemptAt ?? 0;
-          if (Math.abs(leftLastAttempt - rightLastAttempt) > 500) {
-            return leftLastAttempt - rightLastAttempt;
-          }
 
           return 0;
         });
@@ -3953,7 +4036,17 @@ export default function ScannerPage() {
               ? Math.max(OCR_MIN_BUFFERED_CROPS, adaptiveConfig.ocr.requiredBufferedCrops)
               : 1;
           const hasEnoughBufferedCrops = bufferedCropCount >= requiredCropCount;
-          const canReadFirstFrame = track.framesSeen >= OCR_MIN_TRACK_FRAMES || fastFirstRead;
+          // Adaptive single-frame bypass: allow OCR after 1 frame only when
+          // the best available crop already has very high quality, so we aren't
+          // wasting an OCR slot on a blurry entry-frame.
+          const bestCropForQualityCheck = slotRuntime.bestFrameSelector.getBestCrop(track.trackNumber);
+          const bestCropQualityScore = bestCropForQualityCheck?.quality?.overallScore ?? 0;
+          const highQualityFirstFrameBypass =
+            track.framesSeen === 1 &&
+            bestCropQualityScore >= OCR_FAST_FIRST_FRAME_QUALITY_GATE &&
+            (track.bbox.confidence ?? 0) >= OCR_FAST_FIRST_READ_MIN_DETECTOR_CONFIDENCE;
+          const canReadFirstFrame =
+            track.framesSeen >= OCR_MIN_TRACK_FRAMES || fastFirstRead || highQualityFirstFrameBypass;
 
           if (
             !canReadFirstFrame ||
