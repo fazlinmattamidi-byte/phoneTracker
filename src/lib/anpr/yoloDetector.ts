@@ -23,11 +23,14 @@ export interface BoundingBox {
   height: number; // height in canvas pixels
 }
 
+export type DetectorFrameOrientation = 'UPRIGHT' | 'ROTATED_180' | 'ROTATED_90_CW' | 'ROTATED_90_CCW';
+
 export interface DetectedPlateBox {
   bbox: BoundingBox;
   confidence: number;
   label: string;
   sourceEngine: 'LOCAL_ONNX' | 'CV_HEURISTIC';
+  frameOrientation?: DetectorFrameOrientation;
 }
 
 export interface DetectionOptions {
@@ -35,6 +38,7 @@ export interface DetectionOptions {
   iouThreshold?: number;
   enginePreference?: 'AUTO' | 'LOCAL_ONNX' | 'CV_HEURISTIC';
   developerMode?: boolean;
+  orientationFallback?: boolean;
 }
 
 export type DetectorStatus = 'UNINITIALIZED' | 'LOADING' | 'READY' | 'FAILED';
@@ -57,6 +61,8 @@ let detectorQueue: Promise<void> = Promise.resolve();
 let reusableCanvas: HTMLCanvasElement | null = null;
 let reusableCtx: CanvasRenderingContext2D | null = null;
 let reusableFloat32Data: Float32Array | null = null;
+const ORIENTATION_FALLBACKS: DetectorFrameOrientation[] = ['ROTATED_180', 'ROTATED_90_CW', 'ROTATED_90_CCW'];
+const ORIENTATION_FALLBACK_CONFIDENCE_SCALE = 0.98;
 
 let lastDetectorError: string | null = null;
 
@@ -227,7 +233,7 @@ export async function detectMalaysianPlates(
     }
     if (localOnnxSession && detectorStatus === 'READY') {
       try {
-        return await runLocalOnnxDetection(canvas, minConf, iouThreshold);
+        return await runLocalOnnxDetection(canvas, minConf, iouThreshold, options.orientationFallback === true);
       } catch (err) {
         markDetectorRuntimeFailure(err, 'Local ONNX inference failed');
       }
@@ -283,18 +289,118 @@ export async function runBenchmarkDetection(): Promise<boolean> {
   }
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function releaseTransientCanvas(canvas: HTMLCanvasElement): void {
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
+function createOrientationFallbackCanvas(
+  sourceCanvas: HTMLCanvasElement,
+  orientation: DetectorFrameOrientation
+): HTMLCanvasElement | null {
+  if (orientation === 'UPRIGHT' || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return null;
+
+  const output = document.createElement('canvas');
+  const swapsAxes = orientation === 'ROTATED_90_CW' || orientation === 'ROTATED_90_CCW';
+  output.width = swapsAxes ? sourceCanvas.height : sourceCanvas.width;
+  output.height = swapsAxes ? sourceCanvas.width : sourceCanvas.height;
+
+  const ctx = output.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return output;
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.save();
+  if (orientation === 'ROTATED_180') {
+    ctx.translate(output.width, output.height);
+    ctx.rotate(Math.PI);
+  } else if (orientation === 'ROTATED_90_CW') {
+    ctx.translate(output.width, 0);
+    ctx.rotate(Math.PI / 2);
+  } else if (orientation === 'ROTATED_90_CCW') {
+    ctx.translate(0, output.height);
+    ctx.rotate(-Math.PI / 2);
+  }
+  ctx.drawImage(sourceCanvas, 0, 0);
+  ctx.restore();
+
+  return output;
+}
+
+function mapFallbackBoxToSource(
+  bbox: BoundingBox,
+  orientation: DetectorFrameOrientation,
+  sourceWidth: number,
+  sourceHeight: number
+): BoundingBox {
+  let mapped: BoundingBox;
+
+  if (orientation === 'ROTATED_180') {
+    mapped = {
+      x: sourceWidth - (bbox.x + bbox.width),
+      y: sourceHeight - (bbox.y + bbox.height),
+      width: bbox.width,
+      height: bbox.height,
+    };
+  } else if (orientation === 'ROTATED_90_CW') {
+    mapped = {
+      x: bbox.y,
+      y: sourceHeight - (bbox.x + bbox.width),
+      width: bbox.height,
+      height: bbox.width,
+    };
+  } else if (orientation === 'ROTATED_90_CCW') {
+    mapped = {
+      x: sourceWidth - (bbox.y + bbox.height),
+      y: bbox.x,
+      width: bbox.height,
+      height: bbox.width,
+    };
+  } else {
+    mapped = bbox;
+  }
+
+  const left = clampNumber(Math.round(mapped.x), 0, Math.max(0, sourceWidth - 1));
+  const top = clampNumber(Math.round(mapped.y), 0, Math.max(0, sourceHeight - 1));
+  const right = clampNumber(Math.round(mapped.x + mapped.width), left + 1, sourceWidth);
+  const bottom = clampNumber(Math.round(mapped.y + mapped.height), top + 1, sourceHeight);
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+  };
+}
+
+function isUsableMappedFallbackBox(box: DetectedPlateBox, canvasWidth: number, canvasHeight: number): boolean {
+  const longEdge = Math.max(box.bbox.width, box.bbox.height);
+  const shortEdge = Math.min(box.bbox.width, box.bbox.height);
+  const minLongEdge = Math.max(28, Math.max(canvasWidth, canvasHeight) * 0.018);
+  const minShortEdge = Math.max(8, Math.min(canvasWidth, canvasHeight) * 0.007);
+  if (longEdge < minLongEdge || shortEdge < minShortEdge) return false;
+
+  const normalizedAspect = longEdge / Math.max(1, shortEdge);
+  return normalizedAspect >= 1.0 && normalizedAspect <= 7.2;
+}
+
 /**
  * Run Local ONNX Inference with Letterboxing Preprocessing & Inverse Transform
  */
 async function runLocalOnnxDetection(
   canvas: HTMLCanvasElement,
   minConfidence: number,
-  iouThreshold: number
+  iouThreshold: number,
+  orientationFallback: boolean
 ): Promise<DetectedPlateBox[]> {
   if (!localOnnxSession || typeof window === 'undefined') return [];
 
   const queuedInference = detectorQueue.then(() =>
-    runLocalOnnxDetectionExclusive(canvas, minConfidence, iouThreshold)
+    runLocalOnnxDetectionExclusive(canvas, minConfidence, iouThreshold, orientationFallback)
   );
   detectorQueue = queuedInference.then(
     () => undefined,
@@ -304,6 +410,50 @@ async function runLocalOnnxDetection(
 }
 
 async function runLocalOnnxDetectionExclusive(
+  canvas: HTMLCanvasElement,
+  minConfidence: number,
+  iouThreshold: number,
+  orientationFallback: boolean
+): Promise<DetectedPlateBox[]> {
+  const primaryDetections = await runLocalOnnxDetectionPass(canvas, minConfidence, iouThreshold);
+  if (primaryDetections.length > 0) {
+    return primaryDetections.map((box) => ({ ...box, frameOrientation: 'UPRIGHT' }));
+  }
+  if (!orientationFallback) return [];
+
+  const fallbackDetections: DetectedPlateBox[] = [];
+  const fallbackMinConfidence = Math.max(0.22, minConfidence * 0.92);
+
+  for (const orientation of ORIENTATION_FALLBACKS) {
+    const fallbackCanvas = createOrientationFallbackCanvas(canvas, orientation);
+    if (!fallbackCanvas) continue;
+
+    try {
+      const detections = await runLocalOnnxDetectionPass(fallbackCanvas, fallbackMinConfidence, iouThreshold);
+      fallbackDetections.push(
+        ...detections
+          .map((box) => ({
+            ...box,
+            bbox: mapFallbackBoxToSource(box.bbox, orientation, canvas.width, canvas.height),
+            confidence: Math.round(box.confidence * ORIENTATION_FALLBACK_CONFIDENCE_SCALE * 1000) / 1000,
+            frameOrientation: orientation,
+          }))
+          .filter((box) => isUsableMappedFallbackBox(box, canvas.width, canvas.height))
+      );
+    } finally {
+      releaseTransientCanvas(fallbackCanvas);
+    }
+
+    if (fallbackDetections.some((box) => box.confidence >= Math.max(0.52, minConfidence))) {
+      break;
+    }
+  }
+
+  if (fallbackDetections.length === 0) return [];
+  return applyNMS(fallbackDetections, Math.min(iouThreshold, 0.35), canvas.width, canvas.height).slice(0, 12);
+}
+
+async function runLocalOnnxDetectionPass(
   canvas: HTMLCanvasElement,
   minConfidence: number,
   iouThreshold: number

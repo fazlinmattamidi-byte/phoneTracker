@@ -17,14 +17,14 @@ type FakeCanvas = HTMLCanvasElement & {
   __data: Uint8ClampedArray;
 };
 
-type TestGlobal = typeof globalThis & {
+type TestGlobal = {
   window?: unknown;
   document?: unknown;
 };
 
 afterEach(() => {
   vi.restoreAllMocks();
-  const testGlobal = globalThis as TestGlobal;
+  const testGlobal = globalThis as unknown as TestGlobal;
   delete testGlobal.window;
   delete testGlobal.document;
 });
@@ -173,7 +173,7 @@ describe('PlateQualityService', () => {
   });
 
   it('falls back clearly when the quality ONNX model is missing', async () => {
-    (globalThis as TestGlobal).window = {};
+    (globalThis as unknown as TestGlobal).window = {};
     const service = new PlateQualityService({
       fetchFn: vi.fn(async () => ({ ok: false, status: 404 } as Response)),
     });
@@ -185,7 +185,7 @@ describe('PlateQualityService', () => {
   });
 
   it('falls back from WebGPU to WASM and disposes warmup tensors', async () => {
-    (globalThis as TestGlobal).window = {};
+    (globalThis as unknown as TestGlobal).window = {};
     let tensorDisposed = 0;
     let outputDisposed = 0;
     const createCalls: string[][] = [];
@@ -216,7 +216,8 @@ describe('PlateQualityService', () => {
         }),
       },
     };
-    const fetchFn = vi.fn(async (url: string) => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
       if (url.endsWith('.json')) {
         return {
           ok: true,

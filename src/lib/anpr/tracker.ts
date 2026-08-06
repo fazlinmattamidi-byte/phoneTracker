@@ -478,7 +478,9 @@ export class PlateTracker {
       if (this.activeTracks.size >= this.maxActiveTracks) return;
 
       const box = detectedBoxes[idx];
-      if (box.width < 35 || box.height < 10) return;
+      const longEdge = Math.max(box.width, box.height);
+      const shortEdge = Math.min(box.width, box.height);
+      if (longEdge < 35 || shortEdge < 10) return;
 
       const num = this.trackCounter++;
       const now = Date.now();

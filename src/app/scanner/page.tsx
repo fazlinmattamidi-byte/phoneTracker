@@ -43,6 +43,7 @@ import {
   cropCanvasRegionFast,
   prioritiseTracks,
   releaseCanvasMemory,
+  rotateCanvas,
   scaleBoundingBox,
 } from '@/lib/anpr/imageProcessor';
 import { BestFrameSelector } from '@/lib/anpr/bestFrameSelector';
@@ -189,7 +190,8 @@ type ScannerReloadTriggerCode =
   | 'CAMERA_FPS_DROP'
   | 'DETECTOR_SLOWDOWN'
   | 'OCR_QUEUE_BACKLOG'
-  | 'MEMORY_GROWTH';
+  | 'MEMORY_GROWTH'
+  | 'NO_RESULT_TIMEOUT';
 
 type ScannerReloadTrigger = {
   code: ScannerReloadTriggerCode;
@@ -394,6 +396,16 @@ type HealthComponent = {
 type SystemHealthSnapshot = {
   overallScore: number;
   components: HealthComponent[];
+};
+
+type ScannerHealthTone = 'HEALTHY' | 'OCR_LOAD' | 'CAMERA_SLOW' | 'CAMERA_LOST' | 'STARTING';
+
+type ScannerHealthIndicator = {
+  tone: ScannerHealthTone;
+  label: string;
+  detail: string;
+  dotClass: string;
+  pillClass: string;
 };
 
 type ScannerPerformanceTargets = {
@@ -759,6 +771,101 @@ function createSystemHealthSnapshot(
   return { overallScore, components };
 }
 
+function getSystemHealthComponent(
+  health: SystemHealthSnapshot,
+  label: string
+): HealthComponent | undefined {
+  return health.components.find((component) => component.label === label);
+}
+
+function createScannerHealthIndicator({
+  language,
+  isScanning,
+  isCameraReady,
+  cameraError,
+  activeStreamCount,
+  runtimeReady,
+  scannerModelsReady,
+  snapshot,
+  systemHealth,
+  cameraFps,
+  detectorFps,
+}: {
+  language: string;
+  isScanning: boolean;
+  isCameraReady: boolean;
+  cameraError: string;
+  activeStreamCount: number;
+  runtimeReady: boolean;
+  scannerModelsReady: boolean;
+  snapshot: ScannerMetricsSnapshot;
+  systemHealth: SystemHealthSnapshot;
+  cameraFps: number;
+  detectorFps: number;
+}): ScannerHealthIndicator {
+  const isBm = language === 'BM';
+  const queueHealth = getSystemHealthComponent(systemHealth, 'Queue');
+  const cameraHealth = getSystemHealthComponent(systemHealth, 'Camera');
+  const streamMissing = isScanning && (!isCameraReady || activeStreamCount === 0);
+
+  if (cameraError || streamMissing) {
+    return {
+      tone: 'CAMERA_LOST',
+      label: isBm ? 'Kamera Hilang' : 'Camera Lost',
+      detail: cameraError || (isBm ? 'Sambungan kamera terputus' : 'Camera stream is not connected'),
+      dotClass: 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.65)]',
+      pillClass: 'border-red-800 bg-red-950/45 text-red-200',
+    };
+  }
+
+  if (!scannerModelsReady) {
+    return {
+      tone: 'STARTING',
+      label: isBm ? 'Memuat AI' : runtimeReady ? 'Loading OCR' : 'Starting AI',
+      detail: isBm ? 'Model pengimbas sedang dimuatkan' : 'Scanner models are loading',
+      dotClass: 'bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.55)]',
+      pillClass: 'border-cyan-800 bg-cyan-950/35 text-cyan-200',
+    };
+  }
+
+  if (snapshot.lastOcrQueueDepth >= MOBILE_SCANNER_OCR_QUEUE_DEPTH || queueHealth?.status === 'FAIL') {
+    return {
+      tone: 'OCR_LOAD',
+      label: isBm ? 'Beban OCR Tinggi' : 'High OCR Load',
+      detail: isBm
+        ? `Baris gilir OCR ${snapshot.lastOcrQueueDepth}`
+        : `OCR queue depth ${snapshot.lastOcrQueueDepth}`,
+      dotClass: 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.55)]',
+      pillClass: 'border-amber-800 bg-amber-950/35 text-amber-200',
+    };
+  }
+
+  if (
+    (cameraFps > 0 && cameraFps < MOBILE_SCANNER_LOW_FPS_THRESHOLD) ||
+    (detectorFps > 0 && detectorFps < 2) ||
+    cameraHealth?.status === 'WARN' ||
+    cameraHealth?.status === 'FAIL'
+  ) {
+    return {
+      tone: 'CAMERA_SLOW',
+      label: isBm ? 'Kamera Perlahan' : 'Camera Slow',
+      detail: cameraHealth?.detail || `${cameraFps.toFixed(0)} FPS`,
+      dotClass: 'bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.55)]',
+      pillClass: 'border-orange-800 bg-orange-950/35 text-orange-200',
+    };
+  }
+
+  return {
+    tone: 'HEALTHY',
+    label: isBm ? 'Sihat' : 'Healthy',
+    detail: isBm
+      ? `${cameraFps.toFixed(0)} FPS kamera, ${detectorFps.toFixed(0)} FPS pengesan`
+      : `${cameraFps.toFixed(0)} camera FPS, ${detectorFps.toFixed(0)} detector FPS`,
+    dotClass: 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.55)]',
+    pillClass: 'border-emerald-800 bg-emerald-950/35 text-emerald-200',
+  };
+}
+
 function getSampleAverage(samples: number[], count: number, offsetFromEnd = 0): number {
   const end = Math.max(0, samples.length - offsetFromEnd);
   const start = Math.max(0, end - count);
@@ -918,11 +1025,14 @@ function getActiveCameraCaptureConfig(
   cameraConfig: AdaptiveScannerConfig['camera'],
   adaptationLevel = 0
 ): AdaptiveScannerConfig['camera'] {
-  if (!isMobileScannerDevice()) return cameraConfig;
-
-  const profile = getCameraProfileValues(adaptationLevel, true);
-  const fallbackWidth = adaptationLevel >= 2 ? 854 : 960;
-  const fallbackHeight = adaptationLevel >= 2 ? 480 : 540;
+  const mobileOptimized = isMobileScannerDevice();
+  const profile = getCameraProfileValues(adaptationLevel, mobileOptimized);
+  const fallbackWidth = mobileOptimized
+    ? adaptationLevel >= 2 ? 854 : 960
+    : profile.width;
+  const fallbackHeight = mobileOptimized
+    ? adaptationLevel >= 2 ? 480 : 540
+    : profile.height;
 
   return {
     idealWidth: Math.min(cameraConfig.idealWidth, profile.width),
@@ -1112,6 +1222,9 @@ const DETECTION_TARGET_INTERVAL_MS = 65;    // ↓ was 90ms — faster frame pol
 const DETECTION_BUSY_INTERVAL_MS = 100;    // ↓ was 125ms — tighter busy loop
 const DETECTION_MIN_DELAY_MS = 12;         // ↓ was 16ms — min scheduling gap
 const DETECTOR_VALIDATION_INTERVAL_MS = 2000;
+const DETECTOR_ORIENTATION_FALLBACK_EMPTY_FRAMES = 4;
+const DETECTOR_ORIENTATION_FALLBACK_INTERVAL_MS = 800;
+const DETECTOR_ORIENTATION_FALLBACK_HOLD_MS = 3500;
 const CROP_SAMPLE_FAST_MS = 65;            // ↓ was 90ms — crop at high confidence faster
 const CROP_SAMPLE_NORMAL_MS = 110;         // ↓ was 160ms — normal crop sampling faster
 const OCR_FIRST_READ_RETRY_MS = 45;        // ↓ was 80ms — attempt first OCR sooner
@@ -1149,7 +1262,7 @@ const MOTION_NORMAL_MAX = 0.15;
 const MOTION_UNSTABLE_MAX = 0.30;
 const MOTION_COLLECT_ONLY_MAX = 0.50;
 const OVERLAY_ANGLE_SAMPLE_MS = 140;
-const MAX_OVERLAY_TILT_RAD = 0.35;
+const MAX_OVERLAY_TILT_RAD = 0.60;
 const SCANNER_MAINTENANCE_INTERVAL_MS = 1000;
 const COOLDOWN_MAP_MAX_ENTRIES = 120;
 const PERFORMANCE_ADAPTATION_CHECK_MS = 5000;
@@ -1168,6 +1281,11 @@ const MOBILE_SCANNER_STREAM_COOLDOWN_MS = 15000;
 const MOBILE_SCANNER_LOW_FPS_THRESHOLD = 7;
 const MOBILE_SCANNER_MEMORY_GROWTH_PERCENT = 18;
 const MOBILE_SCANNER_OCR_QUEUE_DEPTH = 6;
+/** Auto-reload if camera FPS is healthy but no plate confirmed for this duration (ms). */
+const MOBILE_SCANNER_NO_RESULT_TIMEOUT_MS = 3 * 60 * 1000;
+const CAMERA_RECOVERY_CONFIRM_MS = 2500;
+const CAMERA_RECOVERY_COOLDOWN_MS = 10 * 1000;
+const CAMERA_RECOVERY_MIN_UPTIME_MS = 5 * 1000;
 const SCANNER_CAMERA_STARTUP_SETTLE_MS = 900;
 const SCANNER_CAMERA_RELOAD_SETTLE_MS = 1200;
 const MOBILE_SCANNER_CAMERA_STARTUP_SETTLE_MS = 1800;
@@ -1307,6 +1425,69 @@ function getExpectedMinPlateChars(crop: HTMLCanvasElement): number {
   if (aspect >= 3.0) return 4;
   if (aspect >= 2.3) return 4;
   return 2;
+}
+
+type OcrCanvasCandidate = {
+  canvas: HTMLCanvasElement;
+  isTwoLine: boolean;
+};
+
+type OrientationRecoveryDegrees = 90 | 180 | 270;
+
+function isTwoLineOcrCrop(canvas: HTMLCanvasElement): boolean {
+  return canvas.width / Math.max(1, canvas.height) < 2.3;
+}
+
+function getOrientationRecoveryRotations(canvas: HTMLCanvasElement): OrientationRecoveryDegrees[] {
+  const appearsSideways = canvas.height > canvas.width * 1.08;
+  return appearsSideways ? [90, 270, 180] : [180];
+}
+
+function createOrientationRecoveryOcrCrops(
+  sourceCandidates: OcrCanvasCandidate[],
+  maxSourceCrops = 1
+): OcrCanvasCandidate[] {
+  const recoveryCrops: OcrCanvasCandidate[] = [];
+  const seenSources = new Set<HTMLCanvasElement>();
+  let sourcesUsed = 0;
+
+  for (const source of sourceCandidates) {
+    if (!source.canvas || seenSources.has(source.canvas)) continue;
+    if (source.canvas.width <= 0 || source.canvas.height <= 0) continue;
+    seenSources.add(source.canvas);
+    sourcesUsed++;
+
+    for (const rotation of getOrientationRecoveryRotations(source.canvas)) {
+      const rotatedCanvas = rotateCanvas(source.canvas, rotation);
+      if (rotatedCanvas.width > 0 && rotatedCanvas.height > 0) {
+        recoveryCrops.push({
+          canvas: rotatedCanvas,
+          isTwoLine: isTwoLineOcrCrop(rotatedCanvas),
+        });
+      } else {
+        releaseCanvasMemory(rotatedCanvas);
+      }
+    }
+
+    if (sourcesUsed >= maxSourceCrops) break;
+  }
+
+  return recoveryCrops;
+}
+
+function withOrientationRecoveryCrops<T extends OcrCanvasCandidate>(
+  baseCandidates: T[],
+  recoveryCrops: OcrCanvasCandidate[],
+  baseLimit: number
+): OcrCanvasCandidate[] {
+  const boundedBaseLimit = Math.max(1, baseLimit);
+  if (recoveryCrops.length === 0) return baseCandidates.slice(0, boundedBaseLimit);
+
+  const expandedLimit = Math.min(boundedBaseLimit + recoveryCrops.length, boundedBaseLimit + 3);
+  const firstBaseCandidate = baseCandidates.slice(0, 1);
+  const remainingBaseCandidates = baseCandidates.slice(1);
+
+  return [...firstBaseCandidate, ...recoveryCrops, ...remainingBaseCandidates].slice(0, expandedLimit);
 }
 
 function countPlateChars(text: string): { letters: number; digits: number } {
@@ -1702,6 +1883,25 @@ function getCameraPreflightError(): string | null {
   return null;
 }
 
+function getCameraStartErrorMessage(err: unknown): string {
+  const name = typeof err === 'object' && err !== null && 'name' in err ? String((err as { name?: unknown }).name) : '';
+
+  if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') {
+    return 'Camera permission was denied. Allow camera access in the browser settings, then retry.';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No camera was found. Connect a camera, then retry.';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'Camera is busy or unavailable. Close other apps using it, then retry.';
+  }
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+    return 'The selected camera does not support the requested scan settings. Choose another camera or retry.';
+  }
+
+  return 'Unable to start camera. Please allow camera permission and try again.';
+}
+
 function canRunMultiCameraOnCurrentDevice(): boolean {
   if (typeof window === 'undefined') return false;
   const userAgent = navigator.userAgent || '';
@@ -1726,6 +1926,7 @@ function getMobileScannerReloadTrigger(
   cameraFps: number,
   streams: MediaStream[],
   lastReloadAt: number,
+  lastConfirmedPlateAt: number,
   now: number
 ): ScannerReloadTrigger | null {
   if (streams.some(streamNeedsReconnect)) {
@@ -1785,6 +1986,21 @@ function getMobileScannerReloadTrigger(
       code: 'MEMORY_GROWTH',
       message: 'Mobile browser memory grew',
       confirmationMs: MOBILE_SCANNER_ISSUE_CONFIRM_MS,
+    };
+  }
+
+  // No-result watchdog: camera is healthy (FPS OK, detector running) but no
+  // plate has been confirmed for a long time — the pipeline may be stuck.
+  // Only fires after the scanner has been running long enough to have had a
+  // real opportunity to read plates (same min-uptime guard used by the caller).
+  const cameraHealthy = cameraFps >= MOBILE_SCANNER_LOW_FPS_THRESHOLD && detectorFps >= 2;
+  const noResultBaseTime = lastConfirmedPlateAt || lastRefreshAt;
+  const noResultStale = now - noResultBaseTime >= MOBILE_SCANNER_NO_RESULT_TIMEOUT_MS;
+  if (cameraHealthy && noResultStale) {
+    return {
+      code: 'NO_RESULT_TIMEOUT',
+      message: 'No plates detected — refreshing scanner',
+      confirmationMs: 0,
     };
   }
 
@@ -1880,10 +2096,17 @@ export default function ScannerPage() {
   const scannerProcessingPausedRef = useRef(false);
   const lastScannerReloadAtRef = useRef(0);
   const scannerReloadIssueRef = useRef<{ code: ScannerReloadTriggerCode; firstSeenAt: number } | null>(null);
+  const cameraRecoveryIssueStartedAtRef = useRef(0);
+  const lastCameraRecoveryAtRef = useRef(0);
+  const cameraRecoveryAttemptCountRef = useRef(0);
+  /** Timestamp (Date.now()) of the most recent confirmed plate read. Resets on scanner start/reload. */
+  const lastConfirmedPlateAtRef = useRef(0);
   const scannerReloadNoticeTimerRef = useRef<number | null>(null);
   const mobilePinchZoomRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
   const mobileFacingModeRef = useRef<MobileFacingMode>('environment');
   const resetLiveScanUiRef = useRef<() => void>(() => undefined);
+  const handleStartScanningRef = useRef<() => Promise<void>>(async () => undefined);
+  const scannerAutoStartAttemptedRef = useRef(false);
 
   const [availableCameras, setAvailableCameras] = useState<DesktopCameraDevice[]>([]);
   const [cameraSlots, setCameraSlots] = useState<CameraSlot[]>([{ id: 'camera-slot-1', deviceId: '' }]);
@@ -1932,7 +2155,7 @@ export default function ScannerPage() {
   const getSlotRuntime = useCallback((slotId: string): SlotScannerRuntime => {
     if (!slotRuntimesRef.current[slotId]) {
       slotRuntimesRef.current[slotId] = {
-        tracker: new PlateTracker(20, 8),
+        tracker: new PlateTracker(20, INITIAL_SETTINGS.maxTracks),
         bestFrameSelector: new BestFrameSelector(),
         evidenceBuffer: new VehicleEvidenceBuffer(),
         processingCanvas: null,
@@ -1991,6 +2214,19 @@ export default function ScannerPage() {
       metrics.adaptationLevel,
       isMobileScannerDevice()
     );
+
+    const updatedMetadata: Record<string, CameraRuntimeMetadata> = {};
+    cameraSlotsRef.current.forEach((slot) => {
+      const stream = videoRefs.current[slot.id]?.srcObject as MediaStream | null;
+      if (!stream) return;
+      const cameraDevice = slot.deviceId
+        ? availableCamerasRef.current.find((device) => device.deviceId === slot.deviceId) || null
+        : null;
+      updatedMetadata[slot.id] = getCameraRuntimeMetadata(stream, cameraDevice);
+    });
+    if (Object.keys(updatedMetadata).length > 0) {
+      setCameraMetadataBySlot((prev) => ({ ...prev, ...updatedMetadata }));
+    }
   }, []);
 
   const maybeAdaptRuntimePerformance = useCallback(
@@ -2076,8 +2312,11 @@ export default function ScannerPage() {
 
         if (!started) {
           setScannerProcessingPaused(false);
-          setIsScanning(false);
-          setCurrentPlate('READY');
+          isCameraReadyRef.current = false;
+          setIsCameraReady(false);
+          isScanningRef.current = true;
+          setIsScanning(true);
+          setCurrentPlate('RELOADING');
         } else {
           setScannerProcessingPaused(false);
           setCurrentPlate('SCANNING');
@@ -2129,6 +2368,7 @@ export default function ScannerPage() {
         cameraFps,
         streams,
         lastScannerReloadAtRef.current,
+        lastConfirmedPlateAtRef.current,
         now
       );
 
@@ -2158,6 +2398,56 @@ export default function ScannerPage() {
       if (now - issueFirstSeenAt < trigger.confirmationMs) return;
 
       void requestScannerOnlyReload(trigger);
+    },
+    [requestScannerOnlyReload]
+  );
+
+  const maybeRecoverCameraStream = useCallback(
+    (snapshot: ScannerMetricsSnapshot, detectorFps: number, cameraFps: number) => {
+      if (
+        !isScanningRef.current ||
+        scannerReloadInFlightRef.current ||
+        scannerStartupInFlightRef.current ||
+        (typeof document !== 'undefined' && document.hidden)
+      ) {
+        cameraRecoveryIssueStartedAtRef.current = 0;
+        return;
+      }
+
+      const now = Date.now();
+      const uptimeMs = now - Math.max(snapshot.sessionStartedAt, lastScannerReloadAtRef.current || 0);
+      if (uptimeMs < CAMERA_RECOVERY_MIN_UPTIME_MS) {
+        cameraRecoveryIssueStartedAtRef.current = 0;
+        return;
+      }
+
+      const streams = Object.values(activeStreamsRef.current);
+      const streamLost = streams.length === 0 || streams.some(streamNeedsReconnect);
+      const detectorHasRun = detectorFps > 0 || snapshot.detectorLatencySamples > 0;
+      const cameraStalled = isCameraReadyRef.current && detectorHasRun && streams.length > 0 && cameraFps === 0;
+
+      if (!streamLost && !cameraStalled) {
+        cameraRecoveryIssueStartedAtRef.current = 0;
+        return;
+      }
+
+      if (!cameraRecoveryIssueStartedAtRef.current) {
+        cameraRecoveryIssueStartedAtRef.current = now;
+        return;
+      }
+
+      if (now - cameraRecoveryIssueStartedAtRef.current < CAMERA_RECOVERY_CONFIRM_MS) return;
+      if (lastCameraRecoveryAtRef.current && now - lastCameraRecoveryAtRef.current < CAMERA_RECOVERY_COOLDOWN_MS) return;
+
+      cameraRecoveryIssueStartedAtRef.current = 0;
+      lastCameraRecoveryAtRef.current = now;
+      cameraRecoveryAttemptCountRef.current++;
+
+      void requestScannerOnlyReload({
+        code: 'STREAM_RECONNECT',
+        message: streamLost ? 'Camera stream lost - reconnecting' : 'Camera feed stalled - reconnecting',
+        confirmationMs: 0,
+      });
     },
     [requestScannerOnlyReload]
   );
@@ -2193,12 +2483,13 @@ export default function ScannerPage() {
     setRuntimeMetricsSnapshot(adaptedSnapshot);
     setSystemHealthSnapshot(createSystemHealthSnapshot(adaptedSnapshot, aggregate.detFrames, aggregate.camFrames));
     maybeAutoReloadMobileScanner(adaptedSnapshot, aggregate.detFrames, aggregate.camFrames);
+    maybeRecoverCameraStream(adaptedSnapshot, aggregate.detFrames, aggregate.camFrames);
 
     Object.values(slotMetricsRef.current).forEach((item) => {
       item.camFrames = 0;
       item.detFrames = 0;
     });
-  }, [maybeAdaptRuntimePerformance, maybeAutoReloadMobileScanner]);
+  }, [maybeAdaptRuntimePerformance, maybeAutoReloadMobileScanner, maybeRecoverCameraStream]);
 
   const resetLiveScanUi = useCallback(() => {
     Object.values(slotRuntimesRef.current).forEach((runtime) => {
@@ -2225,6 +2516,10 @@ export default function ScannerPage() {
     lastCameraConstraintApplyAtRef.current = 0;
     completedTrackEventsRef.current = [];
     lostTrackIdsRef.current.clear();
+    // Reset the no-result watchdog baseline so it doesn't fire immediately
+    // after a reload or new session based on the previous session's timing.
+    lastConfirmedPlateAtRef.current = 0;
+    cameraRecoveryIssueStartedAtRef.current = 0;
     const emptySnapshot = createMetricsSnapshot(runtimeMetricsRef.current, []);
     setRuntimeMetricsSnapshot(emptySnapshot);
     setSystemHealthSnapshot(createSystemHealthSnapshot(emptySnapshot, 0, 0));
@@ -2481,6 +2776,7 @@ export default function ScannerPage() {
     Object.values(activeStreamsRef.current).forEach((stream) => {
       stream.getTracks().forEach((track) => {
         track.onended = null;
+        track.onmute = null;
         track.stop();
       });
     });
@@ -2499,6 +2795,7 @@ export default function ScannerPage() {
     });
 
     scannerReloadIssueRef.current = null;
+    cameraRecoveryIssueStartedAtRef.current = 0;
     setPreviewSlotIds([]);
     setCameraMetadataBySlot({});
     setIsCameraReady(false);
@@ -2507,6 +2804,8 @@ export default function ScannerPage() {
         clearScannerReloadNoticeTimer();
         setScannerReloadNotice(null);
       }
+      lastCameraRecoveryAtRef.current = 0;
+      cameraRecoveryAttemptCountRef.current = 0;
       setIsScanning(false);
     }
     resetLiveScanUi();
@@ -2539,6 +2838,7 @@ export default function ScannerPage() {
         if (operationId !== cameraOperationIdRef.current) {
           stream.getTracks().forEach((track) => {
             track.onended = null;
+            track.onmute = null;
             track.stop();
           });
           return false;
@@ -2564,7 +2864,7 @@ export default function ScannerPage() {
       }
 
       stream.getVideoTracks().forEach((track) => {
-        track.onended = () => {
+        const scheduleTrackReconnect = () => {
           if (operationId !== cameraOperationIdRef.current) return;
           if (!isCameraReadyRef.current && !isScanningRef.current) return;
           window.setTimeout(() => {
@@ -2572,6 +2872,8 @@ export default function ScannerPage() {
             void startVisibleCamerasRef.current({ resumeScanning: isScanningRef.current });
           }, 1200);
         };
+        track.onended = scheduleTrackReconnect;
+        track.onmute = scheduleTrackReconnect;
       });
 
       if (!facingMode) rememberSelectedCamera(slot.deviceId || cameraMetadata.deviceId);
@@ -2579,8 +2881,8 @@ export default function ScannerPage() {
       setPreviewSlotIds((ids) => (ids.includes(slot.id) ? ids : [...ids, slot.id]));
       setCameraError('');
       return true;
-    } catch {
-      setCameraError('Unable to start camera. Please allow camera permission and try again.');
+    } catch (err) {
+      setCameraError(getCameraStartErrorMessage(err));
       return false;
     }
   }
@@ -2653,17 +2955,39 @@ export default function ScannerPage() {
     }
   };
 
-  const handleCameraSlotDeviceChange = (slotId: string, deviceId: string) => {
+  const handleCameraSlotDeviceChange = async (slotId: string, deviceId: string) => {
     const hadActiveCamera =
       isCameraReadyRef.current || isScanningRef.current || previewSlotIds.includes(slotId);
+    const wasScanning = isScanningRef.current;
+    const operationId = cameraOperationIdRef.current + 1;
+    cameraOperationIdRef.current = operationId;
     rememberSelectedCamera(deviceId);
-    setCameraSlots((slots) => slots.map((slot) => (slot.id === slotId ? { ...slot, deviceId } : slot)));
+    const currentSlot =
+      cameraSlotsRef.current.find((slot) => slot.id === slotId) ||
+      cameraSlotsRef.current[0] ||
+      { id: slotId, deviceId: '' };
+    const nextSlot = { ...currentSlot, deviceId };
+
+    setCameraSlots((slots) => slots.map((slot) => (slot.id === slotId ? nextSlot : slot)));
     setPreviewSlotIds((ids) => ids.filter((id) => id !== slotId));
     handleSelectActiveSlot(slotId);
 
     if (hadActiveCamera) {
-      stopCamera();
-      setCurrentPlate('READY');
+      stopCamera({ preserveScanningState: wasScanning, invalidatePendingStarts: false });
+      const started = await startCameraForSlot(nextSlot, operationId);
+      if (operationId !== cameraOperationIdRef.current) return;
+
+      isCameraReadyRef.current = started;
+      setIsCameraReady(started);
+      if (started && wasScanning) {
+        setCurrentPlate('SCANNING');
+        isScanningRef.current = true;
+        setIsScanning(true);
+      } else if (!started) {
+        setCurrentPlate('READY');
+        isScanningRef.current = false;
+        setIsScanning(false);
+      }
     }
   };
 
@@ -2735,6 +3059,61 @@ export default function ScannerPage() {
     stopCamera();
     setCurrentPlate('READY');
   };
+
+  useEffect(() => {
+    handleStartScanningRef.current = handleStartScanning;
+  });
+
+  useEffect(() => {
+    if (scannerAutoStartAttemptedRef.current) return;
+    scannerAutoStartAttemptedRef.current = true;
+
+    const timer = window.setTimeout(() => {
+      if (isScanningRef.current || isCameraReadyRef.current || scannerStartupInFlightRef.current) return;
+      void handleStartScanningRef.current();
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isScanning || isCameraReady) return;
+
+    const tryRecoverLostCamera = () => {
+      if (
+        !isScanningRef.current ||
+        isCameraReadyRef.current ||
+        scannerReloadInFlightRef.current ||
+        scannerStartupInFlightRef.current ||
+        (typeof document !== 'undefined' && document.hidden)
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+      if (lastCameraRecoveryAtRef.current && now - lastCameraRecoveryAtRef.current < CAMERA_RECOVERY_COOLDOWN_MS) {
+        return;
+      }
+
+      lastCameraRecoveryAtRef.current = now;
+      cameraRecoveryAttemptCountRef.current++;
+      void requestScannerOnlyReload({
+        code: 'STREAM_RECONNECT',
+        message: 'Camera unavailable - retrying reconnect',
+        confirmationMs: 0,
+      });
+    };
+
+    const firstRetry = window.setTimeout(tryRecoverLostCamera, 1500);
+    const retryInterval = window.setInterval(tryRecoverLostCamera, CAMERA_RECOVERY_COOLDOWN_MS);
+
+    return () => {
+      window.clearTimeout(firstRetry);
+      window.clearInterval(retryInterval);
+    };
+  }, [isCameraReady, isScanning, requestScannerOnlyReload]);
 
   const handleMobileFacingModeChange = (mode: MobileFacingMode) => {
     if (mobileFacingModeRef.current === mode) return;
@@ -3054,6 +3433,9 @@ export default function ScannerPage() {
       if (completedTrackEventsRef.current.length > 500) {
         completedTrackEventsRef.current.length = 500;
       }
+      // Stamp the last time any plate was successfully confirmed so the
+      // NO_RESULT_TIMEOUT watchdog knows the scanner is still producing output.
+      lastConfirmedPlateAtRef.current = Date.now();
 
       track.matchType = resolvedMatchType;
       track.matchedVehicle = matchedVehicle ?? undefined;
@@ -3188,9 +3570,14 @@ export default function ScannerPage() {
               canvas: sample.canvas,
               isTwoLine: sample.canvas.width / Math.max(1, sample.canvas.height) < 2.3,
             };
-            const cropCandidates = adaptiveCrops.length > 0
-              ? adaptiveCrops.slice(0, Math.max(2, adaptiveConfigRef.current.ocr.maxCandidateCrops))
-              : [fallbackCrop];
+            const orientationRecoveryCrops = createOrientationRecoveryOcrCrops([adaptiveCrops[0] ?? fallbackCrop]);
+            orientationRecoveryCrops.forEach((crop) => transientCanvases.push(crop.canvas));
+            const baseCropCandidates = adaptiveCrops.length > 0 ? adaptiveCrops : [fallbackCrop];
+            const cropCandidates = withOrientationRecoveryCrops(
+              baseCropCandidates,
+              orientationRecoveryCrops,
+              Math.max(2, adaptiveConfigRef.current.ocr.maxCandidateCrops)
+            );
             const expectedMinChars = getExpectedMinPlateChars(sample.canvas);
 
             for (const crop of cropCandidates) {
@@ -3579,6 +3966,9 @@ export default function ScannerPage() {
       let lastVideoTime = -1;
       let lastDetectorValidationAt = 0;
       let lastEnvironmentSampleAt = 0;
+      let emptyDetectionFrames = 0;
+      let lastOrientationFallbackAt = 0;
+      let orientationFallbackActiveUntil = 0;
       let adaptiveDetectorIntervalMs = getTierDetectorTargetMs(runtimeMetricsRef.current.deviceTier);
 
       const scheduleDetection = (delay = 100) => {
@@ -3653,10 +4043,22 @@ export default function ScannerPage() {
         let detectedPlates: Awaited<ReturnType<typeof detectMalaysianPlates>> = [];
 
         try {
+          const orientationFallbackNow = Date.now();
+          const orientationFallbackActive = orientationFallbackNow < orientationFallbackActiveUntil;
+          const orientationFallbackDue =
+            orientationFallbackActive ||
+            (
+              emptyDetectionFrames >= DETECTOR_ORIENTATION_FALLBACK_EMPTY_FRAMES &&
+              orientationFallbackNow - lastOrientationFallbackAt >= DETECTOR_ORIENTATION_FALLBACK_INTERVAL_MS
+            );
+          if (orientationFallbackDue) {
+            lastOrientationFallbackAt = orientationFallbackNow;
+          }
           detectedPlates = await detectMalaysianPlates(processingCanvas, {
             minConfidence: Math.max(scannerSettings.detectionThreshold, adaptiveConfigRef.current.detector.minConfidence),
             enginePreference: scannerSettings.detectorEngine,
             developerMode: scannerSettings.debugMode,
+            orientationFallback: orientationFallbackDue,
           });
         } catch (err) {
           console.warn(`[Scanner:${slotId}] Detector frame failed:`, err);
@@ -3673,10 +4075,16 @@ export default function ScannerPage() {
         }
 
         if (detectedPlates.length === 0) {
+          emptyDetectionFrames++;
           const now = Date.now();
           if (now - lastDetectorValidationAt > DETECTOR_VALIDATION_INTERVAL_MS) {
             lastDetectorValidationAt = now;
             await validateDetector();
+          }
+        } else {
+          emptyDetectionFrames = 0;
+          if (detectedPlates.some((plate) => plate.frameOrientation && plate.frameOrientation !== 'UPRIGHT')) {
+            orientationFallbackActiveUntil = Date.now() + DETECTOR_ORIENTATION_FALLBACK_HOLD_MS;
           }
         }
 
@@ -4030,6 +4438,7 @@ export default function ScannerPage() {
             OCR_DEFAULT_MIN_READABLE_WIDTH,
             scannerSettings.minCropWidth || INITIAL_SETTINGS.minCropWidth
           );
+          const readableTrackEdge = Math.max(track.bbox.width, track.bbox.height);
           const bufferedCropCount = slotRuntime.bestFrameSelector.getCropCount(track.trackNumber);
           const requiredCropCount =
             voteCount === 0
@@ -4051,7 +4460,7 @@ export default function ScannerPage() {
           if (
             !canReadFirstFrame ||
             !hasEnoughBufferedCrops ||
-            track.bbox.width < minReadableWidth
+            readableTrackEdge < minReadableWidth
           ) {
             track.ocrState = 'COLLECTING';
             track.pipelineState = 'COLLECTING';
@@ -4256,13 +4665,21 @@ export default function ScannerPage() {
                 isTwoLine: targetCrop.width / Math.max(1, targetCrop.height) < 2.3,
               };
               const expectedMinChars = getExpectedMinPlateChars(targetCrop);
+              const orientationRecoveryCrops = createOrientationRecoveryOcrCrops([adaptiveCrops[0] ?? fallbackCrop]);
+              orientationRecoveryCrops.forEach((crop) => rememberTransientCanvas(crop.canvas));
 
               let text = '';
               let conf = 0;
               let bestScore = 0;
               let bestPatternValid = false;
 
-              for (const crop of candidateCrops.length > 0 ? candidateCrops : [fallbackCrop]) {
+              const orientationAwareCandidateCrops = withOrientationRecoveryCrops(
+                candidateCrops.length > 0 ? candidateCrops : [fallbackCrop],
+                orientationRecoveryCrops,
+                maxCandidateCrops
+              );
+
+              for (const crop of orientationAwareCandidateCrops) {
                 await yieldToBrowser();
                 const result = await recognizePlateFromCanvas(crop.canvas, crop.isTwoLine);
                 const resultText = result.normalizedPlate || result.text;
@@ -4809,6 +5226,15 @@ export default function ScannerPage() {
   };
 
   const runtimeReady = isRuntimeScanningReady(runtimeState);
+  const environmentModelStatus = getEnvironmentModelStatus();
+  const environmentPipelineReady =
+    environmentModelStatus === 'READY' ||
+    environmentModelStatus === 'FALLBACK' ||
+    environmentModelStatus === 'FAILED' ||
+    environmentModelStatus === 'UNINITIALIZED';
+  const ocrModelReady = ocrProvider !== 'NONE';
+  const scannerModelsReady = runtimeReady && ocrModelReady && environmentPipelineReady;
+  const activeStreamCount = Object.values(activeStreamsRef.current).filter((stream) => !streamNeedsReconnect(stream)).length;
   const scannerReloadActive = Boolean(scannerReloadNotice?.isReloading);
   const scannerReloadComplete = Boolean(scannerReloadNotice && !scannerReloadNotice.isReloading);
   const scannerNoticeMode = scannerReloadNotice?.mode ?? 'RELOADING';
@@ -4855,10 +5281,16 @@ export default function ScannerPage() {
       : 'Scanner refreshed and scanning resumed'
     : cameraError
     ? 'Camera unavailable'
-    : isScanning && runtimeReady && supportsMultiCameraScan
-    ? `Scanning ${activeScanTileCount || 1} camera${(activeScanTileCount || 1) === 1 ? '' : 's'}`
-    : isScanning && runtimeReady
-    ? 'Scanning selected camera'
+    : isScanning && !isCameraReady
+    ? 'Camera lost - reconnecting automatically'
+    : isScanning && scannerModelsReady && supportsMultiCameraScan
+    ? `Ready - scanning ${activeScanTileCount || 1} camera${(activeScanTileCount || 1) === 1 ? '' : 's'}`
+    : isScanning && scannerModelsReady
+    ? 'Ready - scanning selected camera'
+    : isScanning && runtimeReady && !ocrModelReady
+    ? 'Loading OCR - camera is active'
+    : isScanning && runtimeReady && !environmentPipelineReady
+    ? 'Loading Environment AI - camera is active'
     : isScanning
     ? 'AI models warming up'
     : previewSlotIds.length > 0
@@ -4880,6 +5312,19 @@ export default function ScannerPage() {
   const showDeveloperOverlay = effectiveDeveloperMode;
   const showUnsupportedBrowserWarning = typeof navigator !== 'undefined' && !isSupportedDesktopScannerBrowser();
   const activeCameraMetadata = cameraMetadataBySlot[activeCameraSlotId];
+  const scannerHealthIndicator = createScannerHealthIndicator({
+    language,
+    isScanning,
+    isCameraReady,
+    cameraError,
+    activeStreamCount,
+    runtimeReady,
+    scannerModelsReady,
+    snapshot: runtimeMetricsSnapshot,
+    systemHealth: systemHealthSnapshot,
+    cameraFps: camFps,
+    detectorFps: detFps,
+  });
   const environmentDistributionPercent = serializeDistributionPercentages(runtimeMetricsSnapshot.environmentDistribution);
   const qualityDistributionPercent = serializeDistributionPercentages(runtimeMetricsSnapshot.qualityDistribution);
   const activeCameraLabel = activeCameraMetadata?.label || getCameraSlotLabel(cameraSlots[0], 0);
@@ -4891,10 +5336,22 @@ export default function ScannerPage() {
     ? scannerNoticeTitle
     : scannerReloadComplete
     ? scannerNoticeTitle
-    : isScanning && runtimeReady
+    : isScanning && !isCameraReady
     ? language === 'BM'
-      ? 'Sedang mengimbas'
-      : 'Scanning'
+      ? 'Kamera disambung semula'
+      : 'Reconnecting camera'
+    : isScanning && scannerModelsReady
+    ? language === 'BM'
+      ? 'Sedia - mengimbas'
+      : 'Ready - scanning'
+    : isScanning && runtimeReady && !ocrModelReady
+    ? language === 'BM'
+      ? 'OCR dimuat'
+      : 'Loading OCR'
+    : isScanning && runtimeReady && !environmentPipelineReady
+    ? language === 'BM'
+      ? 'AI persekitaran dimuat'
+      : 'Loading Environment AI'
     : isScanning
     ? language === 'BM'
       ? 'Memulakan pengimbas'
@@ -4914,6 +5371,10 @@ export default function ScannerPage() {
     ? language === 'BM'
       ? `${scannerReloadNotice?.reason || 'Pengimbas disegar'}; imbasan disambung semula.`
       : `${scannerReloadNotice?.reason || 'Scanner refreshed'}; scanning has resumed.`
+    : isScanning && !isCameraReady
+    ? language === 'BM'
+      ? 'Sambungan kamera terputus. Sistem akan mencuba sambung semula secara automatik.'
+      : 'Camera connection was lost. The scanner is retrying automatically.'
     : isScanning
     ? language === 'BM'
       ? 'Biarkan kamera aktif. Sistem akan terus mencari nombor plat.'
@@ -5192,8 +5653,17 @@ export default function ScannerPage() {
       </div>
 
       {cameraError && (
-        <div className="hidden sm:block rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-xs font-bold text-red-300">
-          {cameraError}
+        <div className="hidden sm:flex items-center justify-between gap-3 rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-xs font-bold text-red-300">
+          <span>{cameraError}</span>
+          <button
+            type="button"
+            onClick={() => void handleStartScanning()}
+            disabled={scannerControlBusy}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-700 bg-red-900/80 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-red-100 hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>{language === 'BM' ? 'Cuba Semula' : 'Retry Camera'}</span>
+          </button>
         </div>
       )}
 
@@ -5203,6 +5673,7 @@ export default function ScannerPage() {
             runtimeState={runtimeState}
             detectorProvider={detectorProvider}
             ocrProvider={ocrProvider}
+            environmentStatus={environmentModelStatus}
             benchmark={benchmarkResult}
             errorMessage={runtimeErrorMessage}
             debugMode={showDeveloperOverlay}
@@ -5234,8 +5705,12 @@ export default function ScannerPage() {
             </span>
           </div>
           {!showDeveloperOverlay && (
-            <span className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-black uppercase text-slate-300">
-              {isScanning ? (language === 'BM' ? 'Aktif' : 'Active') : language === 'BM' ? 'Sedia' : 'Ready'}
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-black uppercase ${scannerHealthIndicator.pillClass}`}
+              title={scannerHealthIndicator.detail}
+            >
+              <span className={`h-2 w-2 rounded-full ${scannerHealthIndicator.dotClass}`} />
+              {scannerHealthIndicator.label}
             </span>
           )}
           {showDeveloperOverlay && (
@@ -5246,10 +5721,34 @@ export default function ScannerPage() {
         </div>
 
         {!showDeveloperOverlay ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {[
               [language === 'BM' ? 'Kamera' : 'Camera', activeCameraLabel],
               [language === 'BM' ? 'Keadaan' : 'Status', simpleScannerStatus],
+              [
+                language === 'BM' ? 'Resolusi' : 'Resolution',
+                activeCameraMetadata?.width
+                  ? `${activeCameraMetadata.width}x${activeCameraMetadata.height}`
+                  : runtimeMetricsSnapshot.cameraProfile.split(' ')[0],
+              ],
+              [language === 'BM' ? 'FPS Kamera' : 'Camera FPS', camFps ? camFps.toFixed(0) : activeCameraMetadata?.fps?.toFixed(0) || '0'],
+              [language === 'BM' ? 'FPS Pengesan' : 'Detector FPS', detFps.toFixed(0)],
+              [language === 'BM' ? 'Baris OCR' : 'OCR Queue', runtimeMetricsSnapshot.lastOcrQueueDepth.toFixed(0)],
+              [
+                language === 'BM' ? 'Memori' : 'Memory',
+                typeof runtimeMetricsSnapshot.memoryCurrentMb === 'number'
+                  ? `${runtimeMetricsSnapshot.memoryCurrentMb.toFixed(1)} MB`
+                  : 'N/A',
+              ],
+              [language === 'BM' ? 'Kesihatan' : 'Health', scannerHealthIndicator.label],
+              [
+                language === 'BM' ? 'Profil' : 'Profile',
+                runtimeMetricsSnapshot.performanceMode.replace('_', ' '),
+              ],
+              [
+                language === 'BM' ? 'Pemulihan' : 'Recovery',
+                cameraRecoveryAttemptCountRef.current.toFixed(0),
+              ],
               [language === 'BM' ? 'Amaran Padanan' : 'Match Alert', simpleLastResult],
               [language === 'BM' ? 'Amaran Sesi' : 'Session Alerts', liveDetections.length.toString()],
             ].map(([label, value]) => (
@@ -5258,12 +5757,14 @@ export default function ScannerPage() {
                 <div className="mt-1 truncate text-sm font-black text-slate-100">{value}</div>
               </div>
             ))}
-            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-3 sm:py-2.5 sm:col-span-2 lg:col-span-4">
+            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-3 sm:py-2.5 sm:col-span-2 lg:col-span-5">
               <div className="text-[10px] font-bold uppercase text-slate-500">
                 {language === 'BM' ? 'Nota' : 'Message'}
               </div>
               <div className="mt-1 text-xs font-semibold text-slate-300">{simpleScannerHint}</div>
-              <div className="mt-1 text-[11px] text-slate-500">{simpleLastResultDetail}</div>
+              <div className="mt-1 text-[11px] text-slate-500">
+                {scannerHealthIndicator.detail} · {simpleLastResultDetail}
+              </div>
             </div>
           </div>
         ) : (
@@ -5471,7 +5972,7 @@ export default function ScannerPage() {
                   <select
                     value={slot.deviceId}
                     onClick={(event) => event.stopPropagation()}
-                    onChange={(event) => handleCameraSlotDeviceChange(slot.id, event.target.value)}
+                    onChange={(event) => void handleCameraSlotDeviceChange(slot.id, event.target.value)}
                     className="h-7 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900/90 px-2 text-[10px] font-bold text-slate-200 outline-none hover:border-cyan-700 focus:border-cyan-500"
                     title={language === 'BM' ? 'Pilih kamera' : 'Choose camera'}
                   >
@@ -5697,7 +6198,16 @@ export default function ScannerPage() {
         <div className="absolute inset-x-3 bottom-3 z-20 sm:hidden">
           {cameraError && (
             <div className="mb-2 rounded-xl border border-red-700 bg-red-950/80 px-3 py-2 text-[11px] font-bold text-red-200 backdrop-blur-md">
-              {cameraError}
+              <div>{cameraError}</div>
+              <button
+                type="button"
+                onClick={() => void handleStartScanning()}
+                disabled={scannerControlBusy}
+                className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-red-700 bg-red-900/80 text-[10px] font-black uppercase tracking-wider text-red-100 active:scale-[0.99] disabled:opacity-50"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>{language === 'BM' ? 'Cuba Semula' : 'Retry Camera'}</span>
+              </button>
             </div>
           )}
           {isScanning ? (

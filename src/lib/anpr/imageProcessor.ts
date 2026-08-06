@@ -30,6 +30,8 @@ export interface MultiCropResult {
   bottomLineCanvas?: HTMLCanvasElement;
 }
 
+export type CanvasRotationDegrees = 0 | 90 | 180 | 270;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -38,6 +40,35 @@ export function releaseCanvasMemory(canvas?: HTMLCanvasElement | null): void {
   if (!canvas) return;
   canvas.width = 0;
   canvas.height = 0;
+}
+
+export function rotateCanvas(sourceCanvas: HTMLCanvasElement, rotationDegrees: CanvasRotationDegrees): HTMLCanvasElement {
+  const normalizedRotation = (((rotationDegrees % 360) + 360) % 360) as CanvasRotationDegrees;
+  const output = document.createElement('canvas');
+  const swapsAxes = normalizedRotation === 90 || normalizedRotation === 270;
+  output.width = swapsAxes ? sourceCanvas.height : sourceCanvas.width;
+  output.height = swapsAxes ? sourceCanvas.width : sourceCanvas.height;
+
+  const ctx = output.getContext('2d', { willReadFrequently: true });
+  if (!ctx || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return output;
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.save();
+  if (normalizedRotation === 90) {
+    ctx.translate(output.width, 0);
+    ctx.rotate(Math.PI / 2);
+  } else if (normalizedRotation === 180) {
+    ctx.translate(output.width, output.height);
+    ctx.rotate(Math.PI);
+  } else if (normalizedRotation === 270) {
+    ctx.translate(0, output.height);
+    ctx.rotate(-Math.PI / 2);
+  }
+  ctx.drawImage(sourceCanvas, 0, 0);
+  ctx.restore();
+
+  return output;
 }
 
 function getSourceDimensions(sourceCanvas: HTMLCanvasElement | HTMLVideoElement): { width: number; height: number } {
@@ -1115,7 +1146,7 @@ export function cropDeskewedCanvasRegionFast(
   targetWidth: number = 360,
   targetHeight: number = 108
 ): HTMLCanvasElement {
-  const boundedAngle = Number.isFinite(angleRad) ? clamp(angleRad, -0.52, 0.52) : 0;
+  const boundedAngle = Number.isFinite(angleRad) ? clamp(angleRad, -0.60, 0.60) : 0;
   if (Math.abs(boundedAngle) < 0.035) {
     return cropCanvasRegionFast(sourceCanvas, bbox, targetWidth, targetHeight);
   }

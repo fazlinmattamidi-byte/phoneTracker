@@ -12,7 +12,7 @@ export const INITIAL_SETTINGS: ScannerSettings = {
   characterConfidenceThreshold: 0.55,
   consensusVotes: 3,
   duplicateCooldown: 30,
-  maxTracks: 8,
+  maxTracks: 12,
   maxOcrConcurrency: 3,
   candidatePermutationLimit: 10,
   minCropWidth: 40,
