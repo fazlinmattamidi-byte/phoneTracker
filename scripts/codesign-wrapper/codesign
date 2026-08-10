@@ -1,0 +1,9 @@
+#!/bin/sh
+case " $* " in
+  *" --strip-disallowed-xattrs "*)
+    exec /usr/bin/codesign "$@"
+    ;;
+  *)
+    exec /usr/bin/codesign --strip-disallowed-xattrs "$@"
+    ;;
+esac

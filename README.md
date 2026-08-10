@@ -1,8 +1,45 @@
-# PlateQ — Adaptive Malaysian ANPR Platform
+# PlateQ — Native Malaysian ANPR Platform
 
-PlateQ is a production-oriented browser ANPR/LPR system for Malaysian number plates, designed for Windows and macOS laptops running the latest Google Chrome or Microsoft Edge with an external USB webcam.
+PlateQ is being migrated from the existing browser ANPR/LPR system into one native Flutter application for Android and iPhone.
+
+The current Next.js implementation remains the source of truth during migration. It should be kept only as the reference implementation until Flutter UI, Kotlin CameraX/ONNX, Swift AVFoundation/ONNX, and the complete ANPR pipeline have verified native equivalents.
+
+Migration documents:
+
+- `docs/mobile-migration-map.md`
+- `docs/mobile-native-contract.md`
+- `docs/mobile-remaining-phases.md`
+- `docs/mobile-phase-1-3-checklist.md`
+- `docs/mobile-phase-4-6-checklist.md`
+- `docs/mobile-phase-1-6-audit.md`
 
 The scanner keeps the existing YOLOv8 Malaysian plate detector, PP-OCR recognition pipeline, ByteTrack lifecycle, runtime metrics, developer overlay, adaptive OCR scheduling, Malaysian validation, database matching, event logging, alerting, and dataset export flow. The current upgrade adds environment intelligence, plate-quality classification, desktop webcam management, and adaptive runtime configuration.
+
+## Native Target Architecture
+
+```text
+Flutter UI
+  -> Android Kotlin CameraX / ONNX Runtime Mobile
+  -> iOS Swift AVFoundation / ONNX Runtime Mobile
+  -> Native ANPR event bridge
+  -> Flutter alerts, matching, history, vehicle management, settings
+```
+
+Flutter source has been started in `lib/`, with official Android and iOS Flutter platform shells generated in `android/` and `ios/`. The current scaffold validates with Flutter 3.44.9:
+
+```bash
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --debug
+flutter build ios --debug --simulator
+```
+
+The Android toolchain is configured and a debug APK builds at `build/app/outputs/flutter-apk/app-debug.apk`. Xcode is configured with an iOS simulator runtime, the iOS simulator app builds at `build/ios/iphonesimulator/Runner.app`, and the app launches on the booted iPhone 17 simulator.
+
+The iOS project includes a local `scripts/codesign-wrapper/codesign` helper and Xcode `OTHER_CODE_SIGN_FLAGS=--strip-disallowed-xattrs` because this macOS/Xcode setup keeps sticky Apple extended attributes on generated Flutter/Xcode build products.
+
+Do not delete the existing browser source until the native replacement passes the verification gates in `docs/mobile-migration-map.md`.
 
 ## Production Pipeline
 
