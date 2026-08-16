@@ -36,6 +36,112 @@ class TrackColors {
   static const red = Color(0xFFF87171);
 }
 
+class TrackPalette {
+  const TrackPalette({
+    required this.isDark,
+    required this.bg,
+    required this.bgDeep,
+    required this.panel,
+    required this.panelSolid,
+    required this.panelSoft,
+    required this.field,
+    required this.border,
+    required this.cyanBorder,
+    required this.cyan,
+    required this.cyanStrong,
+    required this.text,
+    required this.muted,
+    required this.muted2,
+    required this.blue,
+    required this.purple,
+    required this.emerald,
+    required this.amber,
+    required this.red,
+    required this.shadow,
+  });
+
+  final bool isDark;
+  final Color bg;
+  final Color bgDeep;
+  final Color panel;
+  final Color panelSolid;
+  final Color panelSoft;
+  final Color field;
+  final Color border;
+  final Color cyanBorder;
+  final Color cyan;
+  final Color cyanStrong;
+  final Color text;
+  final Color muted;
+  final Color muted2;
+  final Color blue;
+  final Color purple;
+  final Color emerald;
+  final Color amber;
+  final Color red;
+  final Color shadow;
+
+  static const dark = TrackPalette(
+    isDark: true,
+    bg: TrackColors.bg,
+    bgDeep: TrackColors.bgDeep,
+    panel: TrackColors.panel,
+    panelSolid: TrackColors.panelSolid,
+    panelSoft: TrackColors.panelSoft,
+    field: TrackColors.field,
+    border: TrackColors.border,
+    cyanBorder: TrackColors.cyanBorder,
+    cyan: TrackColors.cyan,
+    cyanStrong: TrackColors.cyanStrong,
+    text: TrackColors.text,
+    muted: TrackColors.muted,
+    muted2: TrackColors.muted2,
+    blue: TrackColors.blue,
+    purple: TrackColors.purple,
+    emerald: TrackColors.emerald,
+    amber: TrackColors.amber,
+    red: TrackColors.red,
+    shadow: Color(0x66020617),
+  );
+
+  static const light = TrackPalette(
+    isDark: false,
+    bg: Color(0xFFF8FAFC),
+    bgDeep: Color(0xFFEEF5FB),
+    panel: Color(0xF2FFFFFF),
+    panelSolid: Color(0xFFFFFFFF),
+    panelSoft: Color(0xFFF1F5F9),
+    field: Color(0xFFF8FAFC),
+    border: Color(0xFFCBD5E1),
+    cyanBorder: Color(0xFFBFDBFE),
+    cyan: Color(0xFF0284C7),
+    cyanStrong: Color(0xFF0891B2),
+    text: Color(0xFF0F172A),
+    muted: Color(0xFF475569),
+    muted2: Color(0xFF64748B),
+    blue: Color(0xFF2563EB),
+    purple: Color(0xFF7C3AED),
+    emerald: Color(0xFF047857),
+    amber: Color(0xFFB45309),
+    red: Color(0xFFDC2626),
+    shadow: Color(0x171E293B),
+  );
+
+  factory TrackPalette.fromBrightness(Brightness brightness) {
+    return brightness == Brightness.dark ? dark : light;
+  }
+
+  static TrackPalette of(BuildContext context) {
+    return AppScope.of(context).themeChoice == AppThemeChoice.dark
+        ? dark
+        : light;
+  }
+
+  Color tint(Color tone, [int alpha = 38]) {
+    return Color.alphaBlend(tone.withAlpha(alpha), field);
+  }
+}
+
 class PlateQMobileApp extends StatefulWidget {
   const PlateQMobileApp({super.key});
 
@@ -85,49 +191,45 @@ class _PlateQMobileAppState extends State<PlateQMobileApp> {
 
 ThemeData _buildTheme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
+  final colors = TrackPalette.fromBrightness(brightness);
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
-    scaffoldBackgroundColor:
-        isDark ? TrackColors.bg : const Color(0xFFF8FAFC),
+    scaffoldBackgroundColor: colors.bg,
     fontFamily: 'Roboto',
     colorScheme: ColorScheme.fromSeed(
-      seedColor: TrackColors.cyanStrong,
+      seedColor: colors.cyanStrong,
       brightness: brightness,
-      surface: isDark ? TrackColors.panelSolid : Colors.white,
-      primary: TrackColors.cyanStrong,
+      surface: colors.panelSolid,
+      primary: colors.cyanStrong,
     ),
-    appBarTheme: const AppBarTheme(
-      backgroundColor: TrackColors.panel,
-      foregroundColor: TrackColors.text,
+    appBarTheme: AppBarTheme(
+      backgroundColor: colors.panel,
+      foregroundColor: colors.text,
       elevation: 0,
       centerTitle: false,
     ),
     cardTheme: CardThemeData(
-      color: isDark ? TrackColors.panel : Colors.white,
+      color: colors.panel,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: isDark ? TrackColors.border : const Color(0xFFE2E8F0),
-        ),
+        side: BorderSide(color: colors.border),
       ),
     ),
     chipTheme: ChipThemeData(
-      backgroundColor: isDark ? TrackColors.field : const Color(0xFFF1F5F9),
-      selectedColor: isDark ? const Color(0xE6082F49) : const Color(0xFFE0F2FE),
-      disabledColor: isDark ? TrackColors.panelSoft : const Color(0xFFE2E8F0),
-      side: BorderSide(
-        color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
-      ),
+      backgroundColor: colors.field,
+      selectedColor: colors.tint(colors.cyan, 46),
+      disabledColor: colors.panelSoft,
+      side: BorderSide(color: colors.border),
       labelStyle: TextStyle(
-        color: isDark ? TrackColors.muted : const Color(0xFF334155),
+        color: colors.muted,
         fontSize: 11,
         fontWeight: FontWeight.w800,
       ),
       secondaryLabelStyle: TextStyle(
-        color: isDark ? TrackColors.cyan : const Color(0xFF0369A1),
+        color: colors.cyan,
         fontSize: 11,
         fontWeight: FontWeight.w900,
       ),
@@ -135,8 +237,8 @@ ThemeData _buildTheme(Brightness brightness) {
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: TrackColors.cyanStrong,
-        foregroundColor: TrackColors.bgDeep,
+        backgroundColor: colors.cyanStrong,
+        foregroundColor: isDark ? colors.bgDeep : Colors.white,
         minimumSize: const Size.fromHeight(44),
         textStyle: const TextStyle(
           fontSize: 12,
@@ -148,10 +250,8 @@ ThemeData _buildTheme(Brightness brightness) {
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
-        side: BorderSide(
-          color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
-        ),
+        foregroundColor: colors.text,
+        side: BorderSide(color: colors.border),
         minimumSize: const Size.fromHeight(44),
         textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -159,47 +259,43 @@ ThemeData _buildTheme(Brightness brightness) {
     ),
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
-        foregroundColor: TrackColors.cyan,
+        foregroundColor: colors.cyan,
         textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     ),
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(
-        foregroundColor: TrackColors.muted,
-        backgroundColor: isDark ? const Color(0xCC1E293B) : Colors.white,
+        foregroundColor: colors.muted,
+        backgroundColor: colors.panelSoft,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
-          side: BorderSide(
-            color: isDark ? const Color(0x991E293B) : const Color(0xFFE2E8F0),
-          ),
+          side: BorderSide(color: colors.border),
         ),
       ),
     ),
     listTileTheme: ListTileThemeData(
-      iconColor: isDark ? TrackColors.cyan : const Color(0xFF0284C7),
-      textColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
+      iconColor: colors.cyan,
+      textColor: colors.text,
       titleTextStyle: TextStyle(
-        color: isDark ? TrackColors.text : const Color(0xFF0F172A),
+        color: colors.text,
         fontSize: 14,
         fontWeight: FontWeight.w800,
       ),
       subtitleTextStyle: TextStyle(
-        color: isDark ? TrackColors.muted : const Color(0xFF475569),
+        color: colors.muted,
         fontSize: 12,
         height: 1.35,
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
-      color: isDark ? TrackColors.panelSolid : Colors.white,
+      color: colors.panelSolid,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isDark ? TrackColors.border : const Color(0xFFE2E8F0),
-        ),
+        side: BorderSide(color: colors.border),
       ),
       textStyle: TextStyle(
-        color: isDark ? TrackColors.text : const Color(0xFF0F172A),
+        color: colors.text,
         fontSize: 12,
         fontWeight: FontWeight.w700,
       ),
@@ -207,47 +303,41 @@ ThemeData _buildTheme(Brightness brightness) {
     dropdownMenuTheme: DropdownMenuThemeData(
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: isDark ? TrackColors.field : const Color(0xFFF8FAFC),
+        fillColor: colors.field,
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(
-            color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
-          ),
+          borderSide: BorderSide(color: colors.border),
         ),
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: isDark ? TrackColors.field : const Color(0xFFF8FAFC),
+      fillColor: colors.field,
       labelStyle: TextStyle(
-        color: isDark ? TrackColors.muted : const Color(0xFF475569),
+        color: colors.muted,
         fontSize: 12,
         fontWeight: FontWeight.w700,
       ),
-      prefixIconColor: isDark ? TrackColors.muted2 : const Color(0xFF64748B),
+      prefixIconColor: colors.muted2,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(
-          color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
-        ),
+        borderSide: BorderSide(color: colors.border),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: TrackColors.cyanStrong),
+        borderSide: BorderSide(color: colors.cyanStrong),
       ),
     ),
     textTheme: (isDark ? ThemeData.dark() : ThemeData.light()).textTheme.apply(
-          bodyColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
-          displayColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
+          bodyColor: colors.text,
+          displayColor: colors.text,
         ),
     dialogTheme: DialogThemeData(
-      backgroundColor: isDark ? TrackColors.panelSolid : Colors.white,
+      backgroundColor: colors.panelSolid,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
-        ),
+        side: BorderSide(color: colors.border),
       ),
     ),
   );
@@ -334,6 +424,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final roles = <Role>[Role.user, Role.admin, Role.superAdmin];
     return Scaffold(
       body: SafeArea(
@@ -351,22 +442,23 @@ class _LoginScreenState extends State<LoginScreen> {
                       height: 64,
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
-                        color: TrackColors.bgDeep,
+                        color: colors.bgDeep,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0x6622D3EE)),
-                        boxShadow: const [
-                          BoxShadow(color: Color(0x3322D3EE), blurRadius: 22),
+                        border: Border.all(color: colors.cyanBorder),
+                        boxShadow: [
+                          BoxShadow(
+                              color: colors.cyan.withAlpha(34), blurRadius: 22),
                         ],
                       ),
                       child: Image.asset('public/logo.png', fit: BoxFit.cover),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text(
+                  Text(
                     'TRACK',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: TrackColors.text,
+                      color: colors.text,
                       fontSize: 30,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 0,
@@ -376,8 +468,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     state.t('appSubName'),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: TrackColors.muted,
+                    style: TextStyle(
+                      color: colors.muted,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
@@ -390,8 +482,8 @@ class _LoginScreenState extends State<LoginScreen> {
                         Text(
                           '${state.t('demoRole')} (Select for Demo)',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: TrackColors.cyan,
+                          style: TextStyle(
+                            color: colors.cyan,
                             fontWeight: FontWeight.w900,
                             fontSize: 12,
                           ),
@@ -423,16 +515,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(state.t('loginTitle'),
-                            style: const TextStyle(
-                              color: TrackColors.text,
+                            style: TextStyle(
+                              color: colors.text,
                               fontWeight: FontWeight.w800,
                               fontSize: 18,
                             )),
                         const SizedBox(height: 4),
                         Text(
                           state.t('loginSubtitle'),
-                          style: const TextStyle(
-                              color: TrackColors.muted, fontSize: 12),
+                          style: TextStyle(color: colors.muted, fontSize: 12),
                         ),
                         const SizedBox(height: 18),
                         TextField(
@@ -498,6 +589,7 @@ class _LoginRoleTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     final icon = switch (role) {
       Role.user => Icons.person_outline,
       Role.admin => Icons.verified_user_outlined,
@@ -510,14 +602,14 @@ class _LoginRoleTile extends StatelessWidget {
         height: 76,
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xE6082F49) : const Color(0x99020617),
+          color: selected ? colors.tint(colors.cyan, 42) : colors.field,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? TrackColors.cyan : TrackColors.border,
+            color: selected ? colors.cyan : colors.border,
           ),
           boxShadow: selected
-              ? const [
-                  BoxShadow(color: Color(0x66082F49), blurRadius: 16),
+              ? [
+                  BoxShadow(color: colors.cyan.withAlpha(36), blurRadius: 16),
                 ]
               : null,
         ),
@@ -526,7 +618,7 @@ class _LoginRoleTile extends StatelessWidget {
           children: [
             Icon(
               icon,
-              color: selected ? TrackColors.cyan : TrackColors.muted2,
+              color: selected ? colors.cyan : colors.muted2,
               size: 20,
             ),
             const SizedBox(height: 6),
@@ -536,7 +628,7 @@ class _LoginRoleTile extends StatelessWidget {
               textAlign: TextAlign.center,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: selected ? TrackColors.cyan : TrackColors.muted,
+                color: selected ? colors.cyan : colors.muted,
                 fontSize: 10,
                 fontWeight: FontWeight.w900,
                 height: 1.1,
@@ -589,15 +681,12 @@ class _PlateQShellState extends State<PlateQShell> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final size = MediaQuery.sizeOf(context);
     final wideLayout = size.width >= 900;
     return Scaffold(
       body: DecoratedBox(
-        decoration: BoxDecoration(
-          color: state.themeChoice == AppThemeChoice.dark
-              ? TrackColors.bg
-              : const Color(0xFFF8FAFC),
-        ),
+        decoration: BoxDecoration(color: colors.bg),
         child: SafeArea(
           bottom: false,
           child: Column(
@@ -618,7 +707,7 @@ class _PlateQShellState extends State<PlateQShell> {
                         ],
                       )
                     : _TrackMainPane(
-                        bottomPadding: 108,
+                        bottomPadding: 16,
                         child: _SectionBody(section: state.section),
                       ),
               ),
@@ -641,16 +730,17 @@ class _TrackTopHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final compact = MediaQuery.sizeOf(context).width < 430;
     return Container(
       height: 58,
       padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 20),
-      decoration: const BoxDecoration(
-        color: Color(0xE60F172A),
-        border: Border(bottom: BorderSide(color: Color(0x66155E75))),
+      decoration: BoxDecoration(
+        color: colors.panel,
+        border: Border(bottom: BorderSide(color: colors.cyanBorder)),
         boxShadow: [
           BoxShadow(
-            color: Color(0x66020617),
+            color: colors.shadow,
             blurRadius: 24,
             offset: Offset(0, 8),
           ),
@@ -668,12 +758,12 @@ class _TrackTopHeader extends StatelessWidget {
                     height: compact ? 36 : 40,
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
-                      color: TrackColors.bgDeep,
+                      color: colors.bgDeep,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0x6622D3EE)),
-                      boxShadow: const [
+                      border: Border.all(color: colors.cyanBorder),
+                      boxShadow: [
                         BoxShadow(
-                          color: Color(0x3322D3EE),
+                          color: colors.cyan.withAlpha(34),
                           blurRadius: 18,
                         ),
                       ],
@@ -686,11 +776,11 @@ class _TrackTopHeader extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'TRACK',
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: TrackColors.text,
+                            color: colors.text,
                             fontSize: 20,
                             fontWeight: FontWeight.w900,
                             letterSpacing: 0,
@@ -702,8 +792,8 @@ class _TrackTopHeader extends StatelessWidget {
                             state.t('appSubName'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: TrackColors.muted,
+                            style: TextStyle(
+                              color: colors.muted,
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                               height: 1.25,
@@ -716,23 +806,22 @@ class _TrackTopHeader extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: compact ? 6 : 8),
           _HeaderControl(
+            compact: compact,
             tooltip: '${state.t('languageSetting')}: ${state.language.code}',
             onPressed: state.toggleLanguage,
             child: compact
-                ? const Icon(Icons.language,
-                    size: 16, color: TrackColors.cyan)
+                ? Icon(Icons.language, size: 16, color: colors.cyan)
                 : Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.language,
-                          size: 16, color: TrackColors.cyan),
+                      Icon(Icons.language, size: 16, color: colors.cyan),
                       const SizedBox(width: 5),
                       Text(
                         state.language.code,
-                        style: const TextStyle(
-                          color: TrackColors.text,
+                        style: TextStyle(
+                          color: colors.text,
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                         ),
@@ -740,8 +829,9 @@ class _TrackTopHeader extends StatelessWidget {
                     ],
                   ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: compact ? 6 : 8),
           _HeaderControl(
+            compact: compact,
             tooltip: state.t('themeSetting'),
             onPressed: state.toggleTheme,
             child: Icon(
@@ -750,18 +840,19 @@ class _TrackTopHeader extends StatelessWidget {
                   : Icons.dark_mode_outlined,
               size: 16,
               color: state.themeChoice == AppThemeChoice.dark
-                  ? TrackColors.amber
-                  : TrackColors.cyan,
+                  ? colors.amber
+                  : colors.cyan,
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: compact ? 6 : 8),
           _HeaderControl(
+            compact: compact,
             tooltip: state.t('navProfile'),
             onPressed: () => state.go(AppSection.profile),
-            child: const Icon(
+            child: Icon(
               Icons.person_outline,
               size: 16,
-              color: TrackColors.cyan,
+              color: colors.cyan,
             ),
           ),
           if (!compact) ...[
@@ -769,10 +860,10 @@ class _TrackTopHeader extends StatelessWidget {
             _HeaderControl(
               tooltip: state.t('navLogout'),
               onPressed: state.logout,
-              child: const Icon(
+              child: Icon(
                 Icons.logout,
                 size: 16,
-                color: TrackColors.red,
+                color: colors.red,
               ),
             ),
           ],
@@ -787,27 +878,33 @@ class _HeaderControl extends StatelessWidget {
     required this.tooltip,
     required this.onPressed,
     required this.child,
+    this.compact = false,
   });
 
   final String tooltip;
   final VoidCallback onPressed;
   final Widget child;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Tooltip(
       message: tooltip,
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
         onTap: onPressed,
         child: Container(
-          height: 36,
+          width: compact ? 36 : null,
+          height: compact ? 36 : 36,
           constraints: const BoxConstraints(minWidth: 36),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          padding: compact
+              ? EdgeInsets.zero
+              : const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: const Color(0xCC1E293B),
+            color: colors.panelSoft,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0x991E293B)),
+            border: Border.all(color: colors.border),
           ),
           child: Center(child: child),
         ),
@@ -839,6 +936,60 @@ class _TrackMainPane extends StatelessWidget {
   }
 }
 
+class TrackPageList extends StatelessWidget {
+  const TrackPageList({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      padding: EdgeInsets.only(bottom: compact ? 28 : 10),
+      children: children,
+    );
+  }
+}
+
+class TrackFilterRow extends StatelessWidget {
+  const TrackFilterRow({
+    super.key,
+    required this.children,
+    this.spacing = 8,
+    this.minTwoColumnWidth = 300,
+  });
+
+  final List<Widget> children;
+  final double spacing;
+  final double minTwoColumnWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final twoColumn = children.length > 1 && width >= minTwoColumnWidth;
+        final itemWidth = twoColumn ? (width - spacing) / 2 : width;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final child in children)
+              SizedBox(
+                width: itemWidth,
+                child: child,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _TrackBottomNav extends StatelessWidget {
   const _TrackBottomNav({required this.onDestinationSelected});
 
@@ -847,6 +998,7 @@ class _TrackBottomNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final isMalay = state.language == AppLanguage.bm;
     final items = [
       _NavItemData(
@@ -889,12 +1041,12 @@ class _TrackBottomNav extends StatelessWidget {
           height: 72,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xF2020617),
+            color: colors.isDark ? const Color(0xF2020617) : colors.panel,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0x80155E75)),
-            boxShadow: const [
+            border: Border.all(color: colors.cyanBorder),
+            boxShadow: [
               BoxShadow(
-                color: Color(0xCC020617),
+                color: colors.shadow,
                 blurRadius: 30,
                 offset: Offset(0, 10),
               ),
@@ -932,6 +1084,7 @@ class _TrackBottomNavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     if (item.scannerButton) {
       return InkWell(
         borderRadius: BorderRadius.circular(14),
@@ -945,20 +1098,20 @@ class _TrackBottomNavItem extends StatelessWidget {
               padding: const EdgeInsets.all(3),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: TrackColors.cyanStrong,
-                border: Border.all(color: const Color(0x6622D3EE)),
-                boxShadow: const [
-                  BoxShadow(color: Color(0x5522D3EE), blurRadius: 14),
+                color: colors.cyanStrong,
+                border: Border.all(color: colors.cyanBorder),
+                boxShadow: [
+                  BoxShadow(color: colors.cyan.withAlpha(55), blurRadius: 14),
                 ],
               ),
-              child: const DecoratedBox(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: TrackColors.bgDeep,
+                  color: colors.bgDeep,
                 ),
                 child: Icon(
                   Icons.camera_alt_outlined,
-                  color: TrackColors.cyan,
+                  color: colors.cyan,
                   size: 18,
                 ),
               ),
@@ -967,8 +1120,8 @@ class _TrackBottomNavItem extends StatelessWidget {
             Text(
               item.shortLabel,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: TrackColors.cyan,
+              style: TextStyle(
+                color: colors.cyan,
                 fontSize: 9,
                 fontWeight: FontWeight.w800,
               ),
@@ -984,7 +1137,7 @@ class _TrackBottomNavItem extends StatelessWidget {
       child: Container(
         height: 56,
         decoration: BoxDecoration(
-          color: active ? const Color(0xCC0F172A) : Colors.transparent,
+          color: active ? colors.panelSoft : Colors.transparent,
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
@@ -993,14 +1146,14 @@ class _TrackBottomNavItem extends StatelessWidget {
             Icon(
               item.icon,
               size: 18,
-              color: active ? TrackColors.cyan : TrackColors.muted2,
+              color: active ? colors.cyan : colors.muted2,
             ),
             const SizedBox(height: 5),
             Text(
               item.shortLabel,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: active ? TrackColors.cyan : TrackColors.muted,
+                color: active ? colors.cyan : colors.muted,
                 fontSize: 10,
                 fontWeight: active ? FontWeight.w900 : FontWeight.w500,
               ),
@@ -1018,13 +1171,14 @@ class _TrackSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final items = _moreNavItems(state, includeMain: true);
     return Container(
       width: 256,
       padding: const EdgeInsets.all(12),
-      decoration: const BoxDecoration(
-        color: Color(0xCC020617),
-        border: Border(right: BorderSide(color: TrackColors.border)),
+      decoration: BoxDecoration(
+        color: colors.isDark ? const Color(0xCC020617) : colors.panel,
+        border: Border(right: BorderSide(color: colors.border)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1033,8 +1187,8 @@ class _TrackSidebar extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
             child: Text(
               state.t('navMenuHeader').toUpperCase(),
-              style: const TextStyle(
-                color: TrackColors.muted,
+              style: TextStyle(
+                color: colors.muted,
                 fontSize: 10,
                 fontWeight: FontWeight.w900,
               ),
@@ -1065,6 +1219,7 @@ class _SidebarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: InkWell(
@@ -1074,17 +1229,17 @@ class _SidebarButton extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 44),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           decoration: BoxDecoration(
-            color: active ? const Color(0xCC082F49) : Colors.transparent,
+            color: active ? colors.tint(colors.cyan, 34) : Colors.transparent,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: active ? const Color(0x66155E75) : Colors.transparent,
+              color: active ? colors.cyanBorder : Colors.transparent,
             ),
           ),
           child: Row(
             children: [
               Icon(
                 item.icon,
-                color: active ? TrackColors.cyan : TrackColors.muted,
+                color: active ? colors.cyan : colors.muted,
                 size: 18,
               ),
               const SizedBox(width: 12),
@@ -1093,7 +1248,7 @@ class _SidebarButton extends StatelessWidget {
                   item.label,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: active ? TrackColors.cyan : TrackColors.muted,
+                    color: active ? colors.cyan : colors.muted,
                     fontSize: 14,
                     fontWeight: active ? FontWeight.w800 : FontWeight.w600,
                   ),
@@ -1113,15 +1268,16 @@ class _MoreDrawerSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final items = _moreNavItems(state);
     return SafeArea(
       top: false,
       child: Container(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-        decoration: const BoxDecoration(
-          color: TrackColors.panelSolid,
+        decoration: BoxDecoration(
+          color: colors.panelSolid,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(top: BorderSide(color: Color(0x80155E75))),
+          border: Border(top: BorderSide(color: colors.cyanBorder)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1132,8 +1288,8 @@ class _MoreDrawerSheet extends StatelessWidget {
                 Expanded(
                   child: Text(
                     state.t('moreMenu').toUpperCase(),
-                    style: const TextStyle(
-                      color: TrackColors.text,
+                    style: TextStyle(
+                      color: colors.text,
                       fontSize: 14,
                       fontWeight: FontWeight.w900,
                     ),
@@ -1166,25 +1322,25 @@ class _MoreDrawerSheet extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
                         color: item.section == state.section
-                            ? const Color(0xCC082F49)
-                            : const Color(0x991E293B),
+                            ? colors.tint(colors.cyan, 34)
+                            : colors.panelSoft,
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(
                           color: item.section == state.section
-                              ? const Color(0x6622D3EE)
-                              : const Color(0x991E293B),
+                              ? colors.cyanBorder
+                              : colors.border,
                         ),
                       ),
                       child: Row(
                         children: [
-                          Icon(item.icon, color: TrackColors.cyan, size: 18),
+                          Icon(item.icon, color: colors.cyan, size: 18),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
                               item.label,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: TrackColors.text,
+                              style: TextStyle(
+                                color: colors.text,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w800,
                               ),
@@ -1324,13 +1480,14 @@ class DashboardScreen extends StatelessWidget {
     final activeCases = state.vehicles
         .where((vehicle) => vehicle.status == VehicleStatus.active)
         .length;
+    final visibleHistory = state.visibleHistory;
     final detections =
-        state.history.where((log) => log.type == 'DETECTION').length;
-    final searches = state.history.where((log) => log.type == 'SEARCH').length;
-    final recent = state.history.take(5).toList();
+        visibleHistory.where((log) => log.type == 'DETECTION').length;
+    final searches = visibleHistory.where((log) => log.type == 'SEARCH').length;
+    final recent = visibleHistory.take(5).toList();
     final showQuickNav = MediaQuery.sizeOf(context).width >= 600;
 
-    return ListView(
+    return TrackPageList(
       children: [
         GridView.count(
           crossAxisCount: 2,
@@ -1434,6 +1591,14 @@ class _DashboardActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    final effectiveTone = tone == TrackColors.cyan
+        ? colors.cyan
+        : tone == TrackColors.emerald
+            ? colors.emerald
+            : tone == TrackColors.purple
+                ? colors.purple
+                : tone;
     return InkWell(
       borderRadius: BorderRadius.circular(14),
       onTap: onTap,
@@ -1442,27 +1607,25 @@ class _DashboardActionButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: tone == TrackColors.cyan
-              ? const Color(0xCC082F49)
-              : TrackColors.field,
+              ? colors.tint(colors.cyan, 34)
+              : colors.field,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: tone == TrackColors.cyan
-                ? const Color(0x99155E75)
-                : TrackColors.border,
+            color: tone == TrackColors.cyan ? colors.cyanBorder : colors.border,
           ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: tone, size: 18),
+            Icon(icon, color: effectiveTone, size: 18),
             const SizedBox(width: 10),
             Flexible(
               child: Text(
                 label,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: TrackColors.text,
+                style: TextStyle(
+                  color: colors.text,
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
                 ),
@@ -1502,7 +1665,9 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
-    return ListView(
+    final colors = TrackPalette.of(context);
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return TrackPageList(
       children: [
         SectionCard(
           child: Column(
@@ -1513,23 +1678,34 @@ class _SearchScreenState extends State<SearchScreen> {
               TextField(
                 controller: _query,
                 textCapitalization: TextCapitalization.characters,
-                decoration:
-                    InputDecoration(labelText: state.t('searchPlaceholder')),
+                style: TextStyle(
+                  color: colors.cyan,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  labelText: state.t('searchPlaceholder'),
+                ),
                 onSubmitted: (_) => _search(),
               ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final scope in SearchScope.values)
-                    ChoiceChip(
-                      selected: _scope == scope,
-                      label: Text(_searchScopeLabel(state, scope)),
-                      onSelected: (_) => setState(() => _scope = scope),
-                    ),
-                ],
-              ),
+              if (!compact) ...[
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final scope in SearchScope.values)
+                      TrackOptionButton(
+                        selected: _scope == scope,
+                        label: _searchScopeLabel(state, scope),
+                        compact: true,
+                        onPressed: () => setState(() => _scope = scope),
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: _search,
@@ -1554,13 +1730,46 @@ class SearchResultPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     if (result.exactMatch == null && result.possibleMatches.isEmpty) {
       return SectionCard(
-        child: ListTile(
-          leading:
-              const Icon(Icons.check_circle_outline, color: Color(0xFF22D3EE)),
-          title: Text(state.t('noMatchTitle')),
-          subtitle: Text(state.t('noMatchDesc')),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: colors.tint(colors.cyan, 34),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: colors.cyanBorder),
+              ),
+              child: Icon(Icons.check_circle_outline, color: colors.cyan),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    state.t('noMatchTitle'),
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    state.t('noMatchDesc'),
+                    style: TextStyle(
+                      color: colors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -1569,10 +1778,115 @@ class SearchResultPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (result.exactMatch != null)
+          if (result.exactMatch != null) ...[
             VehicleMatchCard(vehicle: result.exactMatch!, tone: 'EXACT'),
+            _SearchActionPanel(vehicle: result.exactMatch!),
+          ],
           for (final vehicle in result.possibleMatches)
             VehicleMatchCard(vehicle: vehicle, tone: 'POSSIBLE'),
+        ],
+      ),
+    );
+  }
+}
+
+class _SearchActionPanel extends StatelessWidget {
+  const _SearchActionPanel({required this.vehicle});
+
+  final Vehicle vehicle;
+
+  void _mark(
+    BuildContext context, {
+    required VehicleStatus status,
+    required String action,
+    required String details,
+    required String statusMatch,
+  }) {
+    final state = AppScope.of(context);
+    state.setVehicleStatus(vehicle, status);
+    state.addHistoryLog(
+      type: 'SEARCH',
+      action: '$action: ${vehicle.plate}',
+      plate: vehicle.plate,
+      details: details,
+      statusMatch: statusMatch,
+      note: details,
+    );
+    _showSnack(context, '$action recorded for ${vehicle.plate}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.field,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            state.t('actionsHeader').toUpperCase(),
+            style: TextStyle(
+              color: colors.muted,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              TrackOptionButton(
+                selected: vehicle.status == VehicleStatus.flagged,
+                label: state.t('statusFlagged'),
+                icon: Icons.bookmark_added_outlined,
+                tone: TrackColors.red,
+                onPressed: () => _mark(
+                  context,
+                  status: VehicleStatus.flagged,
+                  action: 'Tanda Tindakan',
+                  details:
+                      'Marked for action from native plate search by ${state.role.code}',
+                  statusMatch: 'EXACT',
+                ),
+              ),
+              TrackOptionButton(
+                selected: vehicle.status == VehicleStatus.pending,
+                label: state.t('statusPending'),
+                icon: Icons.pending_actions_outlined,
+                tone: TrackColors.amber,
+                onPressed: () => _mark(
+                  context,
+                  status: VehicleStatus.pending,
+                  action: 'Dalam Semakan',
+                  details:
+                      'Marked as pending review from native plate search by ${state.role.code}',
+                  statusMatch: 'POSSIBLE',
+                ),
+              ),
+              TrackOptionButton(
+                selected: vehicle.status == VehicleStatus.cleared,
+                label: state.t('statusCleared'),
+                icon: Icons.check_circle_outline,
+                tone: TrackColors.emerald,
+                onPressed: () => _mark(
+                  context,
+                  status: VehicleStatus.cleared,
+                  action: 'Kes Selesai',
+                  details:
+                      'Marked as cleared from native plate search by ${state.role.code}',
+                  statusMatch: 'NONE',
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1785,7 +2099,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
         'qualityScore': track?.qualityScore ?? _plateQualityScore,
         'detectorConfidence': track?.detectorConfidence ?? 0,
         'ocrConfidence': consensus.confidence,
-        'ocrProvider': event.provider.isNotEmpty ? event.provider : _ocrProvider,
+        'ocrProvider':
+            event.provider.isNotEmpty ? event.provider : _ocrProvider,
         'environment': _environmentLabel,
         'qualityClass': track?.qualityClass ?? _plateQualityClass,
       },
@@ -1808,35 +2123,68 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
   }
 
+  Future<NativeRuntimeStatus> _refreshNativeRuntime(AppState state) async {
+    final status = await _bridge.initialize();
+    final cameras = await _bridge.listCameras();
+    final preferredCameraId = state.selectedCameraId;
+    final defaultCameraId =
+        _firstWhereOrNull(cameras, (camera) => camera.isDefault)?.id ??
+            (cameras.isNotEmpty ? cameras.first.id : null);
+    final nextCameraId = cameras.any((camera) => camera.id == preferredCameraId)
+        ? preferredCameraId
+        : defaultCameraId;
+    setState(() {
+      _runtimeState = status.runtimeState;
+      _deviceTier = status.deviceTier;
+      _detectorProvider = status.detectorProvider;
+      _ocrProvider = status.ocrProvider;
+      _environmentProvider = status.environmentProvider;
+      _plateQualityProvider = status.plateQualityProvider;
+      _modelAssets = status.modelAssets;
+      _nativeCameras = cameras;
+      _selectedCameraId = nextCameraId;
+      _status = 'Native runtime ${status.runtimeState}';
+    });
+    state.setSelectedCameraId(nextCameraId);
+    if (nextCameraId != null) {
+      await _bridge.selectCamera(nextCameraId);
+    }
+    return status;
+  }
+
+  bool get _requiredModelsReady {
+    final required = _modelAssets.where((asset) => asset.required).toList();
+    return required.isNotEmpty && required.every((asset) => asset.nativeReady);
+  }
+
+  bool _runtimeCanRunRealScanner(NativeRuntimeStatus status) {
+    return status.requiredModelAssetsReady &&
+        status.detectorProvider.startsWith('CPU_ONNX') &&
+        status.detectorProvider != 'CPU_ONNX_ERROR' &&
+        status.ocrProvider.startsWith('CPU_ONNX_PP_OCR') &&
+        status.ocrProvider != 'CPU_ONNX_PP_OCR_ERROR';
+  }
+
+  String _modelReadinessMessage(NativeRuntimeStatus status) {
+    final missing = status.missingRequiredModelAssets
+        .map((asset) => asset.id)
+        .where((id) => id.isNotEmpty)
+        .join(', ');
+    if (missing.isNotEmpty) {
+      return 'Required native ANPR model assets missing: $missing';
+    }
+    final warning =
+        status.warnings.isNotEmpty ? ' ${status.warnings.first}' : '';
+    return 'Native detector/OCR is not ready. Initialize real ONNX models before scanning.$warning';
+  }
+
   Future<void> _initialize() async {
     final state = AppScope.of(context);
     setState(() => _busy = true);
     try {
-      final status = await _bridge.initialize();
-      final cameras = await _bridge.listCameras();
-      final preferredCameraId = state.selectedCameraId;
-      final defaultCameraId =
-          _firstWhereOrNull(cameras, (camera) => camera.isDefault)?.id ??
-              (cameras.isNotEmpty ? cameras.first.id : null);
-      final nextCameraId =
-          cameras.any((camera) => camera.id == preferredCameraId)
-              ? preferredCameraId
-              : defaultCameraId;
-      setState(() {
-        _runtimeState = status.runtimeState;
-        _deviceTier = status.deviceTier;
-        _detectorProvider = status.detectorProvider;
-        _ocrProvider = status.ocrProvider;
-        _environmentProvider = status.environmentProvider;
-        _plateQualityProvider = status.plateQualityProvider;
-        _modelAssets = status.modelAssets;
-        _nativeCameras = cameras;
-        _selectedCameraId = nextCameraId;
-        _status = 'Native runtime ${status.runtimeState}';
-      });
-      state.setSelectedCameraId(nextCameraId);
-      if (nextCameraId != null) {
-        await _bridge.selectCamera(nextCameraId);
+      final status = await _refreshNativeRuntime(state);
+      if (!_runtimeCanRunRealScanner(status)) {
+        setState(() => _status = _modelReadinessMessage(status));
       }
     } catch (error) {
       setState(() => _status = _friendlyBridgeError(error));
@@ -1851,11 +2199,34 @@ class _ScannerScreenState extends State<ScannerScreen> {
     state.setSelectedCameraId(cameraId);
     setState(() {
       _busy = true;
-      _status = 'Starting native scanner';
+      _status = 'Preparing real native ANPR models';
     });
     try {
+      NativeRuntimeStatus? status;
+      if (!_requiredModelsReady ||
+          !_detectorProvider.startsWith('CPU_ONNX') ||
+          !_ocrProvider.startsWith('CPU_ONNX_PP_OCR')) {
+        status = await _refreshNativeRuntime(state);
+      }
+      if (status != null && !_runtimeCanRunRealScanner(status)) {
+        final readinessStatus = status;
+        setState(() {
+          _status = _modelReadinessMessage(readinessStatus);
+          _scanning = false;
+        });
+        return;
+      }
+      final selectedCamera = _selectedCameraId ?? cameraId;
+      if (selectedCamera.isEmpty) {
+        setState(() {
+          _status = 'No native camera is available for scanning.';
+          _scanning = false;
+        });
+        return;
+      }
+      setState(() => _status = 'Starting native scanner');
       await _bridge.startScanning(
-        cameraId: cameraId,
+        cameraId: selectedCamera,
         detectionThreshold: state.settings.detectionConfidence,
         recognitionThreshold: state.settings.ocrConfidence,
         consensusVotes: state.settings.consensusVotes,
@@ -1907,6 +2278,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
+    final compact = MediaQuery.sizeOf(context).width < 600;
     final selectedCamera = _firstWhereOrNull(
         _nativeCameras, (camera) => camera.id == _selectedCameraId);
     final cameraLabel = selectedCamera?.label ?? 'Rear Camera';
@@ -1919,7 +2292,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         .where((asset) => !asset.required && !asset.available)
         .length;
 
-    return ListView(
+    return TrackPageList(
       children: [
         SectionTitle(
             icon: Icons.camera_alt_outlined,
@@ -1945,9 +2318,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
         ),
         const SizedBox(height: 10),
         if (_nativeCameras.isNotEmpty)
-          DropdownButtonFormField<String>(
-            initialValue: _selectedCameraId,
-            decoration: const InputDecoration(labelText: 'Select Camera'),
+          TrackDropdownField<String>(
+            value: _selectedCameraId,
+            label: 'Select Camera',
+            icon: Icons.videocam_outlined,
             items: [
               for (final camera in _nativeCameras)
                 DropdownMenuItem(
@@ -1965,58 +2339,61 @@ class _ScannerScreenState extends State<ScannerScreen> {
         const SizedBox(height: 10),
         CameraSurface(
             scanning: _scanning, tracks: _tracks, alert: _latestAlert),
-        const SizedBox(height: 10),
-        SectionCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SectionTitle(icon: Icons.memory, title: _status),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  MetricChip(
-                      label: state.t('cameraPreview'), value: cameraLabel),
-                  MetricChip(label: 'Runtime', value: _runtimeState),
-                  MetricChip(label: 'Tier', value: _deviceTier),
-                  if (_modelAssets.isNotEmpty)
+        if (!compact) ...[
+          const SizedBox(height: 10),
+          SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SectionTitle(icon: Icons.memory, title: _status),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
                     MetricChip(
-                      label: 'Models',
-                      value: '$readyRequiredModelCount/$requiredModelCount',
-                    ),
-                  MetricChip(label: 'Detector', value: _detectorProvider),
-                  MetricChip(label: 'OCR', value: _ocrProvider),
-                  MetricChip(label: 'OCR State', value: _latestOcrStatus),
-                  MetricChip(
-                      label: state.t('cameraFps'),
-                      value: _cameraFps.toStringAsFixed(1)),
-                  MetricChip(
-                      label: state.t('detectionFps'),
-                      value: _detectorFps.toStringAsFixed(1)),
-                  MetricChip(
-                      label: 'Environment',
-                      value:
-                          '$_environmentLabel ${(_environmentConfidence * 100).round()}%'),
-                  MetricChip(
-                      label: 'Quality',
-                      value:
-                          '$_plateQualityClass ${(_plateQualityScore * 100).round()}%'),
-                  MetricChip(
-                      label: 'Env Provider', value: _environmentProvider),
-                  MetricChip(
-                      label: 'Quality Provider', value: _plateQualityProvider),
-                  MetricChip(label: 'OCR Queue', value: '$_ocrQueueDepth'),
-                  if (missingOptionalModelCount > 0)
+                        label: state.t('cameraPreview'), value: cameraLabel),
+                    MetricChip(label: 'Runtime', value: _runtimeState),
+                    MetricChip(label: 'Tier', value: _deviceTier),
+                    if (_modelAssets.isNotEmpty)
+                      MetricChip(
+                        label: 'Models',
+                        value: '$readyRequiredModelCount/$requiredModelCount',
+                      ),
+                    MetricChip(label: 'Detector', value: _detectorProvider),
+                    MetricChip(label: 'OCR', value: _ocrProvider),
+                    MetricChip(label: 'OCR State', value: _latestOcrStatus),
                     MetricChip(
-                      label: 'Optional Models',
-                      value: '$missingOptionalModelCount missing',
-                    ),
-                ],
-              ),
-            ],
+                        label: state.t('cameraFps'),
+                        value: _cameraFps.toStringAsFixed(1)),
+                    MetricChip(
+                        label: state.t('detectionFps'),
+                        value: _detectorFps.toStringAsFixed(1)),
+                    MetricChip(
+                        label: 'Environment',
+                        value:
+                            '$_environmentLabel ${(_environmentConfidence * 100).round()}%'),
+                    MetricChip(
+                        label: 'Quality',
+                        value:
+                            '$_plateQualityClass ${(_plateQualityScore * 100).round()}%'),
+                    MetricChip(
+                        label: 'Env Provider', value: _environmentProvider),
+                    MetricChip(
+                        label: 'Quality Provider',
+                        value: _plateQualityProvider),
+                    MetricChip(label: 'OCR Queue', value: '$_ocrQueueDepth'),
+                    if (missingOptionalModelCount > 0)
+                      MetricChip(
+                        label: 'Optional Models',
+                        value: '$missingOptionalModelCount missing',
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
         const SizedBox(height: 10),
         SectionCard(
           child: Column(
@@ -2026,19 +2403,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   icon: Icons.list_alt, title: state.t('recentDetectionList')),
               const SizedBox(height: 8),
               if (_tracks.isEmpty)
-                const Text('Waiting for native track events.',
-                    style: TextStyle(color: Color(0xFF94A3B8)))
+                Text('Waiting for native track events.',
+                    style: TextStyle(color: colors.muted))
               else
                 for (final track in _tracks)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.center_focus_strong,
-                        color: Color(0xFF22D3EE)),
-                    title: Text(_trackPlates[track.trackId] ??
-                        (track.plate.isEmpty ? track.trackId : track.plate)),
-                    subtitle: Text(
-                        '${track.pipelineState} · ${track.state} · ${track.qualityClass}'),
-                    trailing: Text('${(track.confidence * 100).round()}%'),
+                  TrackEventCard(
+                    track: track,
+                    displayPlate: _trackPlates[track.trackId] ??
+                        (track.plate.isEmpty ? track.trackId : track.plate),
                   ),
             ],
           ),
@@ -2062,17 +2434,18 @@ class CameraSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return AspectRatio(
       aspectRatio: 16 / 10,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: TrackColors.bgDeep,
-            border: Border.all(color: const Color(0x66155E75)),
+            color: colors.bgDeep,
+            border: Border.all(color: colors.cyanBorder),
           ),
           child: ColoredBox(
-            color: TrackColors.bgDeep,
+            color: colors.bgDeep,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 return Stack(
@@ -2087,7 +2460,7 @@ class CameraSurface extends StatelessWidget {
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             border: Border.all(
-                              color: const Color(0x3322D3EE),
+                              color: colors.cyan.withAlpha(48),
                               width: 1,
                             ),
                           ),
@@ -2144,18 +2517,19 @@ class CameraIdleView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    final colors = TrackPalette.of(context);
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.camera_alt_outlined, color: TrackColors.cyan, size: 44),
-          SizedBox(height: 8),
+          Icon(Icons.camera_alt_outlined, color: colors.cyan, size: 44),
+          const SizedBox(height: 8),
           Text('Native camera preview',
-              style: TextStyle(
-                  color: TrackColors.text, fontWeight: FontWeight.w900)),
-          SizedBox(height: 4),
+              style:
+                  TextStyle(color: colors.text, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
           Text('Tap start scanning to open the native camera.',
-              style: TextStyle(color: TrackColors.muted)),
+              style: TextStyle(color: colors.muted)),
         ],
       ),
     );
@@ -2288,16 +2662,17 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final filtered = state.vehicles.where((vehicle) {
       return _matchesVehicleFilter(vehicle, _query.text, _status, _priority);
     }).toList();
     final pageItems = _pagedItems(filtered, _page, _pageSize);
-    return ListView(
+    return TrackPageList(
       children: [
         SectionTitle(
             icon: Icons.directions_car, title: state.t('manageVehiclesTitle')),
         Text(state.t('manageVehiclesSub'),
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 10),
         SectionCard(
           child: Column(
@@ -2312,35 +2687,37 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
                 onChanged: (_) => setState(() => _page = 0),
               ),
               const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
+              TrackFilterRow(
                 children: [
-                  DropdownButton<VehicleStatus?>(
+                  TrackDropdownField<VehicleStatus?>(
                     value: _status,
-                    hint: const Text('Status'),
+                    label: 'Status',
+                    icon: Icons.flag_outlined,
                     items: [
-                      const DropdownMenuItem<VehicleStatus?>(
-                          value: null, child: Text('All Status')),
+                      DropdownMenuItem<VehicleStatus?>(
+                          value: null, child: Text(state.t('filterByStatus'))),
                       for (final status in VehicleStatus.values)
                         DropdownMenuItem<VehicleStatus?>(
-                            value: status, child: Text(status.code)),
+                            value: status,
+                            child: Text(_vehicleStatusLabel(state, status))),
                     ],
                     onChanged: (value) => setState(() {
                       _status = value;
                       _page = 0;
                     }),
                   ),
-                  DropdownButton<VehiclePriority?>(
+                  TrackDropdownField<VehiclePriority?>(
                     value: _priority,
-                    hint: Text(state.t('priority')),
+                    label: state.t('priority'),
+                    icon: Icons.priority_high,
                     items: [
                       const DropdownMenuItem<VehiclePriority?>(
                           value: null, child: Text('All Priority')),
                       for (final priority in VehiclePriority.values)
                         DropdownMenuItem<VehiclePriority?>(
-                            value: priority, child: Text(priority.code)),
+                            value: priority,
+                            child:
+                                Text(_vehiclePriorityLabel(state, priority))),
                     ],
                     onChanged: (value) => setState(() {
                       _priority = value;
@@ -2354,17 +2731,18 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  FilledButton.icon(
-                    onPressed:
-                        state.canManageVehicles ? () => _openEditor() : null,
-                    icon: const Icon(Icons.add),
-                    label: Text(state.t('addVehicle')),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: state.canManageVehicles ? _importVehicles : null,
-                    icon: const Icon(Icons.upload_file),
-                    label: Text(state.t('importCsv')),
-                  ),
+                  if (state.canManageVehicles)
+                    FilledButton.icon(
+                      onPressed: () => _openEditor(),
+                      icon: const Icon(Icons.add),
+                      label: Text(state.t('addVehicle')),
+                    ),
+                  if (state.canManageSystem)
+                    OutlinedButton.icon(
+                      onPressed: _importVehicles,
+                      icon: const Icon(Icons.upload_file),
+                      label: Text(state.t('importCsv')),
+                    ),
                   OutlinedButton.icon(
                     onPressed: () => _exportVehicles(filtered),
                     icon: const Icon(Icons.download),
@@ -2376,7 +2754,7 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
           ),
         ),
         Text('${filtered.length} / ${state.vehicles.length} vehicles',
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 8),
         if (filtered.isEmpty)
           const EmptyPanel(message: 'No vehicles match the current filters.'),
@@ -2438,19 +2816,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
-    final history = state.history
+    final colors = TrackPalette.of(context);
+    final history = state.visibleHistory
         .where((log) => _matchesHistoryFilter(log, _query.text, _type))
         .toList()
       ..sort((a, b) => _newestFirst
           ? b.timestamp.compareTo(a.timestamp)
           : a.timestamp.compareTo(b.timestamp));
     final pageItems = _pagedItems(history, _page, _pageSize);
-    final types = state.history.map((log) => log.type).toSet().toList()..sort();
-    return ListView(
+    final types = state.visibleHistory.map((log) => log.type).toSet().toList()
+      ..sort();
+    return TrackPageList(
       children: [
         SectionTitle(icon: Icons.history, title: state.t('historyTitle')),
         Text(state.t('historySub'),
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 10),
         SectionCard(
           child: Column(
@@ -2465,14 +2845,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 onChanged: (_) => setState(() => _page = 0),
               ),
               const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
+              TrackFilterRow(
                 children: [
-                  DropdownButton<String?>(
+                  TrackDropdownField<String?>(
                     value: _type,
-                    hint: const Text('Type'),
+                    label: 'Type',
+                    icon: Icons.category_outlined,
                     items: [
                       const DropdownMenuItem<String?>(
                           value: null, child: Text('All Types')),
@@ -2485,27 +2863,28 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       _page = 0;
                     }),
                   ),
-                  FilterChip(
+                  TrackOptionButton(
                     selected: _newestFirst,
-                    avatar: const Icon(Icons.south, size: 18),
-                    label: const Text('Newest First'),
-                    onSelected: (value) => setState(() {
-                      _newestFirst = value;
+                    icon: Icons.south,
+                    label: 'Newest First',
+                    onPressed: () => setState(() {
+                      _newestFirst = !_newestFirst;
                       _page = 0;
                     }),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: () => _exportHistory(history),
-                    icon: const Icon(Icons.download),
-                    label: Text(state.t('exportCsv')),
-                  ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => _exportHistory(history),
+                icon: const Icon(Icons.download),
+                label: Text(state.t('exportCsv')),
               ),
             ],
           ),
         ),
         Text('${history.length} audit records',
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 8),
         if (history.isEmpty)
           const EmptyPanel(
@@ -2594,6 +2973,7 @@ class _UsersScreenState extends State<UsersScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     if (!state.canManageUsers) {
       return const PermissionPanel();
     }
@@ -2603,13 +2983,13 @@ class _UsersScreenState extends State<UsersScreen> {
     final pageItems = _pagedItems(filtered, _page, _pageSize);
     final statuses = state.users.map((user) => user.status).toSet().toList()
       ..sort();
-    return ListView(
+    return TrackPageList(
       children: [
         SectionTitle(
             icon: Icons.people_alt_outlined,
             title: state.t('manageUsersTitle')),
         Text(state.t('manageUsersSub'),
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 10),
         SectionCard(
           child: Column(
@@ -2624,14 +3004,12 @@ class _UsersScreenState extends State<UsersScreen> {
                 onChanged: (_) => setState(() => _page = 0),
               ),
               const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
+              TrackFilterRow(
                 children: [
-                  DropdownButton<Role?>(
+                  TrackDropdownField<Role?>(
                     value: _role,
-                    hint: Text(state.t('roleHeader')),
+                    label: state.t('roleHeader'),
+                    icon: Icons.shield_outlined,
                     items: [
                       const DropdownMenuItem<Role?>(
                           value: null, child: Text('All Roles')),
@@ -2644,9 +3022,10 @@ class _UsersScreenState extends State<UsersScreen> {
                       _page = 0;
                     }),
                   ),
-                  DropdownButton<String?>(
+                  TrackDropdownField<String?>(
                     value: _status,
-                    hint: const Text('Status'),
+                    label: 'Status',
+                    icon: Icons.verified_outlined,
                     items: [
                       const DropdownMenuItem<String?>(
                           value: null, child: Text('All Status')),
@@ -2659,6 +3038,13 @@ class _UsersScreenState extends State<UsersScreen> {
                       _page = 0;
                     }),
                   ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
                   FilledButton.icon(
                     onPressed: () => _openEditor(),
                     icon: const Icon(Icons.person_add_alt),
@@ -2670,7 +3056,7 @@ class _UsersScreenState extends State<UsersScreen> {
           ),
         ),
         Text('${filtered.length} / ${state.users.length} users',
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 8),
         if (filtered.isEmpty)
           const EmptyPanel(message: 'No users match the current filters.'),
@@ -2702,13 +3088,14 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final settings = state.settings;
-    return ListView(
+    return TrackPageList(
       children: [
         SectionTitle(
             icon: Icons.settings_outlined, title: state.t('settingsTitle')),
         Text(state.t('settingsSub'),
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 10),
         SectionCard(
           child: Column(
@@ -2720,20 +3107,20 @@ class SettingsScreen extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: ChoiceChip(
+                    child: TrackOptionButton(
                       selected: state.language == AppLanguage.bm,
-                      label: const Text('Bahasa Melayu (BM)',
-                          overflow: TextOverflow.ellipsis),
-                      onSelected: (_) => state.setLanguage(AppLanguage.bm),
+                      label: 'Bahasa Melayu (BM)',
+                      compact: true,
+                      onPressed: () => state.setLanguage(AppLanguage.bm),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: ChoiceChip(
+                    child: TrackOptionButton(
                       selected: state.language == AppLanguage.en,
-                      label: const Text('English (EN)',
-                          overflow: TextOverflow.ellipsis),
-                      onSelected: (_) => state.setLanguage(AppLanguage.en),
+                      label: 'English (EN)',
+                      compact: true,
+                      onPressed: () => state.setLanguage(AppLanguage.en),
                     ),
                   ),
                 ],
@@ -2745,23 +3132,24 @@ class SettingsScreen extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: ChoiceChip(
+                    child: TrackOptionButton(
                       selected: state.themeChoice == AppThemeChoice.dark,
-                      avatar: const Icon(Icons.dark_mode_outlined, size: 18),
-                      label: Text(state.t('darkModeLabel'),
-                          overflow: TextOverflow.ellipsis),
-                      onSelected: (_) =>
+                      icon: Icons.dark_mode_outlined,
+                      label: state.t('darkModeLabel'),
+                      compact: true,
+                      onPressed: () =>
                           state.setThemeChoice(AppThemeChoice.dark),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: ChoiceChip(
+                    child: TrackOptionButton(
                       selected: state.themeChoice == AppThemeChoice.light,
-                      avatar: const Icon(Icons.light_mode_outlined, size: 18),
-                      label: Text(state.t('lightModeLabel'),
-                          overflow: TextOverflow.ellipsis),
-                      onSelected: (_) =>
+                      icon: Icons.light_mode_outlined,
+                      label: state.t('lightModeLabel'),
+                      tone: TrackColors.amber,
+                      compact: true,
+                      onPressed: () =>
                           state.setThemeChoice(AppThemeChoice.light),
                     ),
                   ),
@@ -2775,202 +3163,36 @@ class SettingsScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SettingSlider(
-                label: state.t('detectionConfidenceThreshold'),
-                value: settings.detectionConfidence,
-                onChanged: (value) => state.updateSettings(
-                    settings.copyWith(detectionConfidence: value)),
-              ),
-              SettingSlider(
-                label: state.t('ocrConfidenceThreshold'),
-                value: settings.ocrConfidence,
-                onChanged: (value) => state
-                    .updateSettings(settings.copyWith(ocrConfidence: value)),
-              ),
-              SettingIntSlider(
-                label: 'Auto Refresh Rate',
-                value: settings.autoRefreshRate,
-                min: 5,
-                max: 120,
-                suffix: 's',
-                onChanged: (value) => state
-                    .updateSettings(settings.copyWith(autoRefreshRate: value)),
-              ),
-              SettingIntSlider(
-                label: 'Consensus Votes',
-                value: settings.consensusVotes,
-                min: 1,
-                max: 6,
-                onChanged: (value) => state
-                    .updateSettings(settings.copyWith(consensusVotes: value)),
-              ),
-              SettingIntSlider(
-                label: 'Max Active Tracks',
-                value: settings.maxTracks,
-                min: 1,
-                max: 16,
-                onChanged: (value) =>
-                    state.updateSettings(settings.copyWith(maxTracks: value)),
-              ),
-              SettingIntSlider(
-                label: 'Max OCR Concurrency',
-                value: settings.maxOcrConcurrency,
-                min: 1,
-                max: 6,
-                onChanged: (value) => state.updateSettings(
-                    settings.copyWith(maxOcrConcurrency: value)),
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Special-Series Recognition'),
-                subtitle: const Text(
-                    'Enable registered special-prefix correction and probability scoring'),
-                value: settings.enableSpecialSeries,
-                onChanged: (value) => state.updateSettings(
-                    settings.copyWith(enableSpecialSeries: value)),
-              ),
-              SpecialSeriesPrefixEditor(
-                prefixes: state.runtimeSpecialSeriesPrefixes,
-                enabled: state.canManageSystem,
-                onChanged: state.setRuntimeSpecialSeriesPrefixText,
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(state.t('soundAlertSetting')),
-                subtitle: Text(state.t('soundAlertSub')),
+              TrackSwitchTile(
+                icon: Icons.volume_up_outlined,
+                title: state.t('soundAlertSetting'),
+                subtitle: state.t('soundAlertSub'),
                 value: settings.soundAlerts,
                 onChanged: (value) =>
                     state.updateSettings(settings.copyWith(soundAlerts: value)),
               ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Developer Mode'),
-                subtitle: const Text(
-                    'Show runtime diagnostics and native bridge warnings'),
-                value: settings.developerMode,
-                onChanged: state.canManageSystem
-                    ? (value) => state
-                        .updateSettings(settings.copyWith(developerMode: value))
-                    : null,
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Dataset Mode'),
-                subtitle: const Text(
-                    'Record reviewed samples for future detector/OCR retraining'),
-                value: settings.datasetMode,
-                onChanged: state.canManageSystem
-                    ? (value) => state
-                        .updateSettings(settings.copyWith(datasetMode: value))
-                    : null,
-              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        SectionCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SectionTitle(
+                  icon: Icons.info_outline, title: state.t('versionInfo')),
+              const SizedBox(height: 12),
+              _InfoRow(label: state.t('softwareNameLabel'), value: 'TRACK'),
+              _InfoRow(
+                  label: state.t('engineVersionLabel'), value: 'v2.4.0-native'),
+              const _InfoRow(
+                  label: 'Native Status', value: 'Flutter Android/iOS'),
             ],
           ),
         ),
         const SizedBox(height: 10),
         MoreScreen(showHeader: true),
       ],
-    );
-  }
-}
-
-class SpecialSeriesPrefixEditor extends StatefulWidget {
-  const SpecialSeriesPrefixEditor({
-    super.key,
-    required this.prefixes,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  final List<String> prefixes;
-  final bool enabled;
-  final ValueChanged<String> onChanged;
-
-  @override
-  State<SpecialSeriesPrefixEditor> createState() =>
-      _SpecialSeriesPrefixEditorState();
-}
-
-class _SpecialSeriesPrefixEditorState extends State<SpecialSeriesPrefixEditor> {
-  late final TextEditingController _controller;
-  String _lastAppliedText = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _lastAppliedText = widget.prefixes.join(', ');
-    _controller = TextEditingController(text: _lastAppliedText);
-  }
-
-  @override
-  void didUpdateWidget(covariant SpecialSeriesPrefixEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final nextText = widget.prefixes.join(', ');
-    if (nextText != _lastAppliedText) {
-      _lastAppliedText = nextText;
-      _controller.text = nextText;
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final text = _controller.text;
-    _lastAppliedText = text;
-    widget.onChanged(text);
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _remove(String prefix) {
-    final nextPrefixes =
-        widget.prefixes.where((item) => item != prefix).join(', ');
-    _controller.text = nextPrefixes;
-    _lastAppliedText = nextPrefixes;
-    widget.onChanged(nextPrefixes);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _controller,
-            enabled: widget.enabled,
-            textCapitalization: TextCapitalization.characters,
-            decoration: InputDecoration(
-              labelText: 'Runtime Special Prefixes',
-              prefixIcon: const Icon(Icons.local_police_outlined),
-              suffixIcon: IconButton(
-                tooltip: 'Save prefixes',
-                onPressed: widget.enabled ? _save : null,
-                icon: const Icon(Icons.save_outlined),
-              ),
-            ),
-            onSubmitted: (_) => _save(),
-          ),
-          if (widget.prefixes.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final prefix in widget.prefixes)
-                  InputChip(
-                    label: Text(prefix),
-                    onDeleted: widget.enabled ? () => _remove(prefix) : null,
-                  ),
-              ],
-            ),
-          ],
-        ],
-      ),
     );
   }
 }
@@ -3038,59 +3260,122 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final user = AppScope.of(context).currentUser;
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     _syncUser(user);
-    return ListView(
+    return TrackPageList(
       children: [
         SectionTitle(
             icon: Icons.person_outline, title: state.t('profileTitle')),
         Text(state.t('profileSub'),
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            style: TextStyle(color: colors.muted, fontSize: 12)),
         const SizedBox(height: 10),
+        SectionCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: colors.tint(colors.cyan, 34),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: colors.cyanBorder),
+                      boxShadow: [
+                        BoxShadow(
+                            color: colors.cyan.withAlpha(34), blurRadius: 18),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        (user?.name.isNotEmpty ?? false)
+                            ? user!.name.characters.first.toUpperCase()
+                            : '?',
+                        style: TextStyle(
+                          color: colors.cyan,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          user?.name ?? '-',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: colors.text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        if (user != null) _RoleBadge(role: user.role),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _ProfileMetaRow(
+                icon: Icons.mail_outline,
+                tone: colors.cyan,
+                text: user?.email ?? '-',
+              ),
+              const SizedBox(height: 8),
+              _ProfileMetaRow(
+                icon: Icons.phone_outlined,
+                tone: colors.emerald,
+                text: user?.phone ?? '-',
+              ),
+            ],
+          ),
+        ),
         SectionCard(
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: const Color(0xCC082F49),
-                foregroundColor: TrackColors.cyan,
-                child: Text(
-                  (user?.name.isNotEmpty ?? false)
-                      ? user!.name.characters.first.toUpperCase()
-                      : '?',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                  ),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: colors.tint(colors.cyan, 34),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: colors.cyanBorder),
                 ),
+                child: Icon(Icons.lock_outline, color: colors.cyan, size: 20),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      user?.name ?? '-',
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: TrackColors.text,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
+                    Text('Account Access',
+                        style: TextStyle(
+                          color: colors.text,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13,
+                        )),
                     const SizedBox(height: 4),
                     Text(
-                      user?.email ?? '-',
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: TrackColors.muted,
-                        fontSize: 12,
-                      ),
+                      'Credentials control dashboard access, scanner review, and audit actions.',
+                      style: TextStyle(color: colors.muted, fontSize: 12),
                     ),
                   ],
                 ),
               ),
-              if (user != null) _RoleBadge(role: user.role),
             ],
+          ),
+        ),
+        SectionCard(
+          child: OutlinedButton.icon(
+            onPressed: state.logout,
+            icon: const Icon(Icons.logout, color: TrackColors.red),
+            label: Text(state.t('navLogout')),
           ),
         ),
         SectionCard(
@@ -3165,6 +3450,7 @@ class MoreScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     final items = <_MoreItem>[
       _MoreItem(
           state.t('navVehicles'), Icons.directions_car, AppSection.vehicles),
@@ -3201,25 +3487,25 @@ class MoreScreen extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
                       color: item.section == state.section
-                          ? const Color(0xCC082F49)
-                          : TrackColors.field,
+                          ? colors.tint(colors.cyan, 34)
+                          : colors.field,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: item.section == state.section
-                            ? const Color(0x6622D3EE)
-                            : TrackColors.border,
+                            ? colors.cyanBorder
+                            : colors.border,
                       ),
                     ),
                     child: Row(
                       children: [
-                        Icon(item.icon, color: TrackColors.cyan, size: 18),
+                        Icon(item.icon, color: colors.cyan, size: 18),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             item.label,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: TrackColors.text,
+                            style: TextStyle(
+                              color: colors.text,
                               fontSize: 12,
                               fontWeight: FontWeight.w800,
                             ),
@@ -3251,6 +3537,7 @@ class PermissionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final colors = TrackPalette.of(context);
     return SectionCard(
       child: Row(
         children: [
@@ -3258,11 +3545,11 @@ class PermissionPanel extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xCC082F49),
+              color: colors.tint(colors.cyan, 34),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0x66155E75)),
+              border: Border.all(color: colors.cyanBorder),
             ),
-            child: const Icon(Icons.lock_outline, color: TrackColors.cyan),
+            child: Icon(Icons.lock_outline, color: colors.cyan),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -3271,15 +3558,15 @@ class PermissionPanel extends StatelessWidget {
               children: [
                 Text(
                   state.t('readOnlyBadge'),
-                  style: const TextStyle(
-                    color: TrackColors.text,
+                  style: TextStyle(
+                    color: colors.text,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'This section follows the existing ADMIN / SUPER_ADMIN permission rule.',
-                  style: TextStyle(color: TrackColors.muted, fontSize: 12),
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 ),
               ],
             ),
@@ -3438,14 +3725,16 @@ class _VehicleDraftDialogState extends State<VehicleDraftDialog> {
               Row(
                 children: [
                   Expanded(
-                    child: DropdownButtonFormField<VehiclePriority>(
-                      initialValue: _priority,
-                      decoration:
-                          InputDecoration(labelText: state.t('priority')),
+                    child: TrackDropdownField<VehiclePriority>(
+                      value: _priority,
+                      label: state.t('priority'),
+                      icon: Icons.priority_high,
                       items: [
                         for (final priority in VehiclePriority.values)
                           DropdownMenuItem(
-                              value: priority, child: Text(priority.code)),
+                              value: priority,
+                              child:
+                                  Text(_vehiclePriorityLabel(state, priority))),
                       ],
                       onChanged: (value) =>
                           setState(() => _priority = value ?? _priority),
@@ -3453,13 +3742,15 @@ class _VehicleDraftDialogState extends State<VehicleDraftDialog> {
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: DropdownButtonFormField<VehicleStatus>(
-                      initialValue: _status,
-                      decoration: const InputDecoration(labelText: 'Status'),
+                    child: TrackDropdownField<VehicleStatus>(
+                      value: _status,
+                      label: 'Status',
+                      icon: Icons.flag_outlined,
                       items: [
                         for (final status in VehicleStatus.values)
                           DropdownMenuItem(
-                              value: status, child: Text(status.code)),
+                              value: status,
+                              child: Text(_vehicleStatusLabel(state, status))),
                       ],
                       onChanged: (value) =>
                           setState(() => _status = value ?? _status),
@@ -3555,10 +3846,10 @@ class _UserDraftDialogState extends State<UserDraftDialog> {
               Row(
                 children: [
                   Expanded(
-                    child: DropdownButtonFormField<Role>(
-                      initialValue: _role,
-                      decoration:
-                          InputDecoration(labelText: state.t('roleHeader')),
+                    child: TrackDropdownField<Role>(
+                      value: _role,
+                      label: state.t('roleHeader'),
+                      icon: Icons.shield_outlined,
                       items: [
                         for (final role in Role.values)
                           DropdownMenuItem(
@@ -3571,9 +3862,10 @@ class _UserDraftDialogState extends State<UserDraftDialog> {
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _status,
-                      decoration: const InputDecoration(labelText: 'Status'),
+                    child: TrackDropdownField<String>(
+                      value: _status,
+                      label: 'Status',
+                      icon: Icons.verified_outlined,
                       items: const [
                         DropdownMenuItem(
                             value: 'ACTIVE', child: Text('ACTIVE')),
@@ -3646,6 +3938,7 @@ class VehicleListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return SectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3657,8 +3950,8 @@ class VehicleListCard extends StatelessWidget {
                 child: Text(
                   vehicle.plate,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: TrackColors.cyan,
+                  style: TextStyle(
+                    color: colors.cyan,
                     fontSize: 22,
                     fontWeight: FontWeight.w900,
                     height: 1,
@@ -3668,7 +3961,7 @@ class VehicleListCard extends StatelessWidget {
               _StatusBadge(label: vehicle.status.code),
               if (canEdit)
                 PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, color: TrackColors.muted),
+                  icon: Icon(Icons.more_vert, color: colors.muted),
                   onSelected: (value) {
                     if (value == 'edit') onEdit?.call();
                     if (value == 'delete') onDelete?.call();
@@ -3684,8 +3977,8 @@ class VehicleListCard extends StatelessWidget {
           Text(
             '${vehicle.brand} ${vehicle.model} / ${vehicle.colour} / ${vehicle.year}',
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: TrackColors.text,
+            style: TextStyle(
+              color: colors.text,
               fontSize: 13,
               fontWeight: FontWeight.w800,
             ),
@@ -3695,7 +3988,7 @@ class VehicleListCard extends StatelessWidget {
             '${vehicle.customerName} / ${vehicle.financeCompany} / ${vehicle.reference}',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: TrackColors.muted, fontSize: 12),
+            style: TextStyle(color: colors.muted, fontSize: 12),
           ),
           if (vehicle.remark.isNotEmpty) ...[
             const SizedBox(height: 4),
@@ -3703,7 +3996,7 @@ class VehicleListCard extends StatelessWidget {
               vehicle.remark,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: TrackColors.muted2, fontSize: 12),
+              style: TextStyle(color: colors.muted2, fontSize: 12),
             ),
           ],
           const SizedBox(height: 10),
@@ -3713,8 +4006,8 @@ class VehicleListCard extends StatelessWidget {
               const Spacer(),
               Text(
                 _currency(vehicle.outstandingAmount),
-                style: const TextStyle(
-                  color: TrackColors.muted,
+                style: TextStyle(
+                  color: colors.muted,
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
                 ),
@@ -3749,16 +4042,19 @@ class UserListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return SectionCard(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
             radius: 21,
-            backgroundColor: const Color(0xCC082F49),
-            foregroundColor: TrackColors.cyan,
+            backgroundColor: colors.tint(colors.cyan, 34),
+            foregroundColor: colors.cyan,
             child: Text(
-              user.name.isEmpty ? '?' : user.name.characters.first.toUpperCase(),
+              user.name.isEmpty
+                  ? '?'
+                  : user.name.characters.first.toUpperCase(),
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
@@ -3773,8 +4069,8 @@ class UserListCard extends StatelessWidget {
                       child: Text(
                         user.name,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: TrackColors.text,
+                        style: TextStyle(
+                          color: colors.text,
                           fontSize: 15,
                           fontWeight: FontWeight.w900,
                         ),
@@ -3787,19 +4083,19 @@ class UserListCard extends StatelessWidget {
                 Text(
                   user.email,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: TrackColors.muted, fontSize: 12),
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   '${user.phone} / ${user.status} / ${_formatTime(user.lastLogin)}',
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: TrackColors.muted2, fontSize: 11),
+                  style: TextStyle(color: colors.muted2, fontSize: 11),
                 ),
               ],
             ),
           ),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: TrackColors.muted),
+            icon: Icon(Icons.more_vert, color: colors.muted),
             onSelected: (value) {
               if (value == 'edit') onEdit();
               if (value == 'toggle') onToggle();
@@ -3833,14 +4129,23 @@ class _StatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     final tone = switch (label) {
-      'ACTIVE' => TrackColors.emerald,
-      'FLAGGED' => TrackColors.red,
-      'PENDING' => TrackColors.amber,
-      'CLEARED' => TrackColors.cyan,
-      _ => TrackColors.muted,
+      'ACTIVE' => colors.emerald,
+      'FLAGGED' => colors.red,
+      'PENDING' => colors.amber,
+      'CLEARED' => colors.cyan,
+      _ => colors.muted,
     };
-    return _TinyBadge(label: label, tone: tone);
+    final state = AppScope.of(context);
+    final displayLabel = switch (label) {
+      'ACTIVE' => state.t('statusActive'),
+      'FLAGGED' => state.t('statusFlagged'),
+      'PENDING' => state.t('statusPending'),
+      'CLEARED' => state.t('statusCleared'),
+      _ => label,
+    };
+    return _TinyBadge(label: displayLabel, tone: tone);
   }
 }
 
@@ -3851,13 +4156,21 @@ class _PriorityBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     final tone = switch (label) {
-      'HIGH' || 'URGENT' => TrackColors.red,
-      'MEDIUM' => TrackColors.amber,
-      'LOW' => TrackColors.emerald,
-      _ => TrackColors.cyan,
+      'HIGH' || 'URGENT' => colors.red,
+      'MEDIUM' => colors.amber,
+      'LOW' => colors.emerald,
+      _ => colors.cyan,
     };
-    return _TinyBadge(label: label, tone: tone);
+    final state = AppScope.of(context);
+    final displayLabel = switch (label) {
+      'HIGH' || 'URGENT' => state.t('priorityHigh'),
+      'MEDIUM' => state.t('priorityMedium'),
+      'LOW' => state.t('priorityLow'),
+      _ => label,
+    };
+    return _TinyBadge(label: displayLabel, tone: tone);
   }
 }
 
@@ -3868,10 +4181,11 @@ class _RoleBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     final tone = switch (role) {
-      Role.superAdmin => TrackColors.cyan,
-      Role.admin => TrackColors.blue,
-      Role.user => TrackColors.muted,
+      Role.superAdmin => colors.cyan,
+      Role.admin => colors.blue,
+      Role.user => colors.muted,
     };
     return _TinyBadge(label: role.code, tone: tone);
   }
@@ -3885,10 +4199,11 @@ class _TinyBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: Color.alphaBlend(tone.withAlpha(38), TrackColors.field),
+        color: colors.tint(tone, colors.isDark ? 38 : 24),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: tone.withAlpha(130)),
       ),
@@ -3925,16 +4240,7 @@ class UserHistoryDialog extends StatelessWidget {
                 child: ListView(
                   shrinkWrap: true,
                   children: [
-                    for (final log in logs)
-                      ListTile(
-                        leading: Icon(_historyIcon(log.type),
-                            color: const Color(0xFF22D3EE)),
-                        title: Text(log.action),
-                        subtitle: Text(
-                            '${log.details}\n${_formatTime(log.timestamp)}'),
-                        isThreeLine: true,
-                        trailing: Text(log.statusMatch ?? log.type),
-                      ),
+                    for (final log in logs) _AuditDialogRow(log: log),
                   ],
                 ),
               ),
@@ -3949,117 +4255,38 @@ class UserHistoryDialog extends StatelessWidget {
   }
 }
 
-class VehicleMatchCard extends StatelessWidget {
-  const VehicleMatchCard(
-      {super.key, required this.vehicle, required this.tone});
-
-  final Vehicle vehicle;
-  final String tone;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: TrackColors.field,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: tone == 'EXACT'
-                ? const Color(0x99F87171)
-                : const Color(0x99FBBF24),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              tone == 'EXACT' ? Icons.warning_amber : Icons.help_outline,
-              color: tone == 'EXACT' ? TrackColors.red : TrackColors.amber,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    vehicle.plate,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: TrackColors.cyan,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                      height: 1,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${vehicle.brand} ${vehicle.model} / ${vehicle.customerName}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: TrackColors.text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${vehicle.financeCompany} / ${vehicle.reference}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: TrackColors.muted,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _TinyBadge(
-              label: tone,
-              tone: tone == 'EXACT' ? TrackColors.red : TrackColors.amber,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class HistoryListTile extends StatelessWidget {
-  const HistoryListTile({super.key, required this.log});
+class _AuditDialogRow extends StatelessWidget {
+  const _AuditDialogRow({required this.log});
 
   final HistoryLog log;
 
   @override
   Widget build(BuildContext context) {
-    return SectionCard(
+    final colors = TrackPalette.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.field,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.border),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xCC082F49),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0x66155E75)),
-            ),
-            child: Icon(_historyIcon(log.type),
-                color: TrackColors.cyan, size: 18),
-          ),
-          const SizedBox(width: 12),
+          Icon(_historyIcon(log.type), color: colors.cyan, size: 18),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  log.plate ?? log.action,
+                  log.action,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: TrackColors.text,
-                    fontSize: 14,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 12,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -4068,13 +4295,12 @@ class HistoryListTile extends StatelessWidget {
                   log.details,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: TrackColors.muted, fontSize: 12),
+                  style: TextStyle(color: colors.muted, fontSize: 11),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Text(
                   _formatTime(log.timestamp),
-                  style:
-                      const TextStyle(color: TrackColors.muted2, fontSize: 11),
+                  style: TextStyle(color: colors.muted2, fontSize: 10),
                 ),
               ],
             ),
@@ -4090,81 +4316,140 @@ class HistoryListTile extends StatelessWidget {
   }
 }
 
-class SettingSlider extends StatelessWidget {
-  const SettingSlider({
-    super.key,
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
+class VehicleMatchCard extends StatelessWidget {
+  const VehicleMatchCard(
+      {super.key, required this.vehicle, required this.tone});
 
-  final String label;
-  final double value;
-  final ValueChanged<double> onChanged;
+  final Vehicle vehicle;
+  final String tone;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final colors = TrackPalette.of(context);
+    final resultTone = tone == 'EXACT' ? colors.red : colors.amber;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: colors.field,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: resultTone.withAlpha(150)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
-            Text('${(value * 100).round()}%'),
+            Icon(
+              tone == 'EXACT' ? Icons.warning_amber : Icons.help_outline,
+              color: resultTone,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    vehicle.plate,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.cyan,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      height: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${vehicle.brand} ${vehicle.model} / ${vehicle.customerName}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${vehicle.financeCompany} / ${vehicle.reference}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _TinyBadge(
+              label: tone,
+              tone: resultTone,
+            ),
           ],
         ),
-        Slider(
-            value: value,
-            min: 0.1,
-            max: 0.95,
-            divisions: 85,
-            onChanged: onChanged),
-      ],
+      ),
     );
   }
 }
 
-class SettingIntSlider extends StatelessWidget {
-  const SettingIntSlider({
-    super.key,
-    required this.label,
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.onChanged,
-    this.suffix = '',
-  });
+class HistoryListTile extends StatelessWidget {
+  const HistoryListTile({super.key, required this.log});
 
-  final String label;
-  final int value;
-  final int min;
-  final int max;
-  final ValueChanged<int> onChanged;
-  final String suffix;
+  final HistoryLog log;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-                child: Text(label,
-                    style: const TextStyle(fontWeight: FontWeight.w700))),
-            Text('$value$suffix'),
-          ],
-        ),
-        Slider(
-          value: value.toDouble(),
-          min: min.toDouble(),
-          max: max.toDouble(),
-          divisions: max - min,
-          onChanged: (next) => onChanged(next.round()),
-        ),
-      ],
+    final colors = TrackPalette.of(context);
+    return SectionCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: colors.tint(colors.cyan, 34),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: colors.cyanBorder),
+            ),
+            child: Icon(_historyIcon(log.type), color: colors.cyan, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  log.plate ?? log.action,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  log.details,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: colors.muted, fontSize: 12),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _formatTime(log.timestamp),
+                  style: TextStyle(color: colors.muted2, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _TinyBadge(
+            label: log.statusMatch ?? log.type,
+            tone: _historyTone(log.statusMatch ?? log.type),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -4176,16 +4461,17 @@ class EmptyPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return SectionCard(
       child: Row(
         children: [
-          const Icon(Icons.inbox_outlined, color: TrackColors.cyan),
+          Icon(Icons.inbox_outlined, color: colors.cyan),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               message,
-              style: const TextStyle(
-                color: TrackColors.muted,
+              style: TextStyle(
+                color: colors.muted,
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
               ),
@@ -4213,6 +4499,7 @@ class PagedListControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     final pageCount = ((totalItems + pageSize - 1) ~/ pageSize).clamp(1, 9999);
     final safePage = page.clamp(0, pageCount - 1);
     final start = totalItems == 0 ? 0 : safePage * pageSize + 1;
@@ -4225,7 +4512,7 @@ class PagedListControls extends StatelessWidget {
           Expanded(
             child: Text(
               '$start-$end of $totalItems',
-              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+              style: TextStyle(color: colors.muted, fontSize: 12),
             ),
           ),
           IconButton.filledTonal(
@@ -4235,7 +4522,8 @@ class PagedListControls extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text('${safePage + 1} / $pageCount',
-              style: const TextStyle(fontWeight: FontWeight.w800)),
+              style:
+                  TextStyle(color: colors.text, fontWeight: FontWeight.w800)),
           const SizedBox(width: 8),
           IconButton.filledTonal(
             tooltip: 'Next Page',
@@ -4264,16 +4552,17 @@ class StatTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Container(
       constraints: const BoxConstraints(minHeight: 76),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: TrackColors.panel,
+        color: colors.panel,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0x66155E75)),
-        boxShadow: const [
+        border: Border.all(color: colors.cyanBorder),
+        boxShadow: [
           BoxShadow(
-            color: Color(0x66020617),
+            color: colors.shadow,
             blurRadius: 18,
             offset: Offset(0, 8),
           ),
@@ -4289,21 +4578,21 @@ class StatTile extends StatelessWidget {
                 child: Text(
                   label.toUpperCase(),
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: TrackColors.muted,
+                  style: TextStyle(
+                    color: colors.muted,
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     height: 1.1,
                   ),
                 ),
               ),
-              Icon(icon, color: TrackColors.cyan, size: 16),
+              Icon(icon, color: colors.cyan, size: 16),
             ],
           ),
           Text(
             value,
-            style: const TextStyle(
-              color: TrackColors.text,
+            style: TextStyle(
+              color: colors.text,
               fontSize: 26,
               fontWeight: FontWeight.w900,
               height: 1,
@@ -4322,23 +4611,24 @@ class SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: TrackColors.panel,
+        color: colors.panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: TrackColors.border),
-        boxShadow: const [
+        border: Border.all(color: colors.border),
+        boxShadow: [
           BoxShadow(
-            color: Color(0x52020617),
+            color: colors.shadow,
             blurRadius: 20,
             offset: Offset(0, 8),
           ),
         ],
       ),
       child: DefaultTextStyle.merge(
-        style: const TextStyle(color: TrackColors.text),
+        style: TextStyle(color: colors.text),
         child: child,
       ),
     );
@@ -4357,16 +4647,17 @@ class SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Row(
       children: [
-        Icon(icon, color: TrackColors.cyan, size: 18),
+        Icon(icon, color: colors.cyan, size: 18),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
             title.toUpperCase(),
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: TrackColors.text,
+            style: TextStyle(
+              color: colors.text,
               fontSize: 13,
               fontWeight: FontWeight.w900,
               letterSpacing: 0,
@@ -4386,21 +4677,397 @@ class MetricChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: TrackColors.field,
+        color: colors.field,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: TrackColors.border),
+        border: Border.all(color: colors.border),
       ),
       child: Text(
         '$label: $value',
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: TrackColors.muted,
+        style: TextStyle(
+          color: colors.muted,
           fontSize: 11,
           fontWeight: FontWeight.w800,
         ),
+      ),
+    );
+  }
+}
+
+class TrackOptionButton extends StatelessWidget {
+  const TrackOptionButton({
+    super.key,
+    required this.selected,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+    this.tone = TrackColors.cyan,
+    this.compact = false,
+  });
+
+  final bool selected;
+  final String label;
+  final VoidCallback? onPressed;
+  final IconData? icon;
+  final Color tone;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    final effectiveTone = tone == TrackColors.cyan
+        ? colors.cyan
+        : tone == TrackColors.emerald
+            ? colors.emerald
+            : tone == TrackColors.amber
+                ? colors.amber
+                : tone == TrackColors.red
+                    ? colors.red
+                    : tone == TrackColors.purple
+                        ? colors.purple
+                        : tone == TrackColors.blue
+                            ? colors.blue
+                            : tone;
+    final disabled = onPressed == null;
+    final foreground = disabled
+        ? colors.muted2
+        : selected
+            ? effectiveTone
+            : colors.muted;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onPressed,
+      child: Container(
+        constraints: BoxConstraints(minHeight: compact ? 38 : 42),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 12,
+          vertical: compact ? 8 : 10,
+        ),
+        decoration: BoxDecoration(
+          color: selected
+              ? Color.alphaBlend(effectiveTone.withAlpha(38), colors.field)
+              : colors.field,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? effectiveTone.withAlpha(150) : colors.border,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: effectiveTone.withAlpha(28),
+                    blurRadius: 14,
+                    offset: const Offset(0, 6),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: foreground, size: compact ? 15 : 16),
+              const SizedBox(width: 7),
+            ],
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: foreground,
+                  fontSize: compact ? 11 : 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TrackDropdownField<T> extends StatelessWidget {
+  const TrackDropdownField({
+    super.key,
+    required this.value,
+    required this.label,
+    required this.items,
+    required this.onChanged,
+    this.icon,
+  });
+
+  final T? value;
+  final String label;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?>? onChanged;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return DropdownButtonFormField<T>(
+      initialValue: value,
+      isExpanded: true,
+      dropdownColor: colors.panelSolid,
+      icon: Icon(Icons.keyboard_arrow_down, color: colors.cyan),
+      style: TextStyle(
+        color: colors.text,
+        fontSize: compact ? 11 : 12,
+        fontWeight: FontWeight.w800,
+      ),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(
+          color: colors.muted,
+          fontSize: compact ? 10 : 12,
+          fontWeight: FontWeight.w700,
+        ),
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: compact ? 8 : 12,
+          vertical: compact ? 12 : 14,
+        ),
+        prefixIcon: icon == null ? null : Icon(icon, size: compact ? 18 : 20),
+        prefixIconConstraints: BoxConstraints(minWidth: compact ? 36 : 48),
+      ),
+      items: items,
+      onChanged: onChanged,
+    );
+  }
+}
+
+class TrackSwitchTile extends StatelessWidget {
+  const TrackSwitchTile({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    final enabled = onChanged != null;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.field,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: value ? colors.cyanBorder : colors.border,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: enabled ? colors.cyan : colors.muted2, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: enabled ? colors.text : colors.muted2,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: colors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: colors.cyan,
+            activeTrackColor: colors.isDark
+                ? const Color(0xFF164E63)
+                : const Color(0xFFA5F3FC),
+            inactiveThumbColor: colors.muted,
+            inactiveTrackColor: colors.isDark
+                ? const Color(0xFF1E293B)
+                : const Color(0xFFE2E8F0),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class TrackEventCard extends StatelessWidget {
+  const TrackEventCard({
+    super.key,
+    required this.track,
+    required this.displayPlate,
+  });
+
+  final AnprTrack track;
+  final String displayPlate;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    final confidence = '${(track.confidence * 100).round()}%';
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.field,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: colors.tint(colors.cyan, 34),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: colors.cyanBorder),
+            ),
+            child:
+                Icon(Icons.center_focus_strong, color: colors.cyan, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  displayPlate,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.cyan,
+                    fontFamily: 'monospace',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${track.pipelineState} / ${track.state} / ${track.qualityClass}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: colors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _TinyBadge(label: confidence, tone: colors.cyan),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: colors.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: colors.text,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileMetaRow extends StatelessWidget {
+  const _ProfileMetaRow({
+    required this.icon,
+    required this.tone,
+    required this.text,
+  });
+
+  final IconData icon;
+  final Color tone;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TrackPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: colors.field,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: tone, size: 17),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.text,
+                fontFamily: 'monospace',
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -4462,6 +5129,30 @@ String _searchScopeLabel(AppState state, SearchScope scope) {
       return state.t('caseReference');
     case SearchScope.vehicle:
       return state.t('vehicleDetails');
+  }
+}
+
+String _vehicleStatusLabel(AppState state, VehicleStatus status) {
+  switch (status) {
+    case VehicleStatus.active:
+      return state.t('statusActive');
+    case VehicleStatus.flagged:
+      return state.t('statusFlagged');
+    case VehicleStatus.pending:
+      return state.t('statusPending');
+    case VehicleStatus.cleared:
+      return state.t('statusCleared');
+  }
+}
+
+String _vehiclePriorityLabel(AppState state, VehiclePriority priority) {
+  switch (priority) {
+    case VehiclePriority.high:
+      return state.t('priorityHigh');
+    case VehiclePriority.medium:
+      return state.t('priorityMedium');
+    case VehiclePriority.low:
+      return state.t('priorityLow');
   }
 }
 

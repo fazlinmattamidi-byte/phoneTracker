@@ -17,12 +17,12 @@ Current state:
 - Native per-track best evidence retention is implemented with quality/detector/size/stability scoring and cleanup when tracks are removed or replaced.
 - Native evidence now writes raw vehicle/plate JPEGs plus enhanced, binary, top-line, bottom-line, and inner-text plate variants with crop dimensions and preprocessing metadata on Android/iOS OCR events.
 - Flutter now verifies packaged required model assets, stages available assets to native filesystem paths before native initialize, and surfaces required/optional model readiness in scanner diagnostics.
-- Android now includes ONNX Runtime Mobile with a release keep rule, guarded CPU session loading for staged detector/OCR/environment/quality models, live camera-frame YOLO detector inference from 640 letterboxed CameraX YUV tensors, Android PP-OCR inference from best plate crops, and multi-detection tracker fanout up to `maxTracks`; fallback scanning remains active if a model cannot load, infer, or produce usable output.
+- Android now includes ONNX Runtime Mobile with a release keep rule, guarded CPU session loading for staged detector/OCR/environment/quality models, live camera-frame YOLO detector inference from 640 letterboxed CameraX YUV tensors, Android PP-OCR inference from best plate crops, and multi-detection tracker fanout up to `maxTracks`; detector/OCR fallback scanning is disabled so failed model readiness is surfaced instead of producing dummy tracks or plates.
 - Shared Dart YOLO output postprocessing is implemented and tested for YOLOv8-style tensors, 640 letterbox reverse mapping, confidence/objectness filtering, Malaysian plate-size/aspect filters, NMS, and multiple non-overlapping plate boxes.
 - Shared Dart PP-OCR dictionary loading and greedy CTC decoding are implemented and tested against the packaged dictionary asset.
 - Phase 17-18 runtime adaptation basics are implemented with LOW/MEDIUM/HIGH device tiers, adaptive analyzer stride, OCR concurrency caps, memory reporting, and thermal state reporting.
-- Phase 20 local release-mode artifacts are buildable: Android release APK, Android release AAB, and unsigned iOS release app. Production signing/submission remains pending.
-- Native detector/tracker/quality/environment fallback intelligence is implemented for Android and iOS. Android live YOLO detector inference and Android PP-OCR tensor inference are implemented behind fallback safety; iOS ONNX package integration and real-device camera validation are not complete.
+- Phase 20 local release-mode artifacts are buildable: Android release APK, Android release AAB, iOS simulator app, and unsigned iOS release app. Production signing/submission remains pending.
+- Native detector/tracker/quality/environment intelligence is implemented for Android and iOS. Android live YOLO detector inference, iOS live YOLO detector inference, Android PP-OCR tensor inference, and iOS PP-OCR tensor inference now require real model output for detector/OCR events. Real-device camera/OCR validation is still required.
 
 ## Overall Remaining Phase List
 
@@ -33,11 +33,11 @@ Current state:
 | 4 | Authentication/backend | Local/native complete / backend integration external | Production backend details | Local login/session restore/logout, hardened native session storage, native session channels, native JSON app storage, `PLATEQ_API_BASE_URL` backend config, and API client scaffold exist. Production sync completes when endpoint/schema is provided and wired. |
 | 5 | Android CameraX layer | Local foundation complete / device signoff pending | Android real-device validation | CameraX preview, permission flow, camera list, lifecycle binding, ImageAnalysis frame acquisition, runtime frame metadata, native file picker, and Android build pass. External signoff requires real-device camera stability validation. |
 | 6 | iOS AVFoundation layer | Local foundation complete / device signoff pending | Real iPhone signing and camera validation | AVFoundation preview/output source, permission flow, camera list, lifecycle hooks, runtime events, native file picker, iOS simulator build, and iOS simulator launch pass. External signoff requires real-device camera validation. |
-| 7 | Native detector | Android live YOLO multi-box inference started / iOS ONNX pending | iOS ONNX Runtime Mobile, real-device validation | Android/iOS now produce native frame-derived plate candidates with thresholds, normalized overlay coordinates, provider status, detector FPS, fallback behavior, verified packaged `plate-detector.onnx`, staged native model paths, and tested shared YOLO postprocessing for tensor decode, letterbox reverse mapping, filters, and NMS. Android now preprocesses live CameraX frames into 640 letterboxed YUV/RGB tensors, runs `plate-detector.onnx`, and feeds multiple usable model boxes into the native tracker with heuristic fallback if inference fails. Full YOLOv8 parity completes when iOS runs the same ONNX path and real-device fixture output matches the browser. |
+| 7 | Native detector | Implemented locally / real-device validation pending | Real-device validation | Android/iOS now produce native frame-derived plate candidates with thresholds, normalized overlay coordinates, provider status, detector FPS, verified packaged `plate-detector.onnx`, staged native model paths, and tested shared YOLO postprocessing for tensor decode, letterbox reverse mapping, filters, and NMS. Android CameraX and iOS AVFoundation frames are preprocessed into 640 letterboxed tensors, run through CPU ONNX detector sessions, and feed only real model boxes into the native tracker. No synthetic fallback boxes are emitted when YOLO returns no detections. |
 | 8 | Native tracker | Functional fallback complete | Detector events, frame timestamps | Android/iOS now keep per-track IDs, visible/lost/removed lifecycle, short prediction, confidence smoothing, track caps, and overlay payloads. Validation against real multi-vehicle clips remains. |
 | 9 | Plate quality | Functional fallback complete / ONNX provider optional | Crop pipeline, optional quality ONNX model | Android/iOS now score brightness, contrast, glare, sharpness, size, detector confidence, and emit web-compatible quality classes. Quality ONNX provider remains optional because the browser also supports deterministic heuristic fallback. |
 | 10 | Environment intelligence | Functional fallback complete / ONNX provider optional | Full-frame inference/stats | Android/iOS now classify day, good condition, low light, night, fog, glare, and backlight from frame stats and expose environment confidence/provider status without stopping scanning. Environment ONNX provider remains optional for broader class parity. |
-| 11 | PP-OCR native recognizer | Android ONNX recognizer implemented / iOS ONNX pending | ONNX Runtime Mobile, crop preprocessing | Android/iOS emit typed OCR events from stable tracks with raw/enhanced/binary/top-line/bottom-line/inner-text plate crop evidence, verified/staged PP-OCR model and dictionary assets, and shared Dart dictionary/greedy CTC decoding tests. Android now loads the staged OCR dictionary/session, preprocesses best plate crops into PaddleOCR `1x3x48x320` tensors, runs CPU ONNX inference, greedily decodes CTC output, ranks enhanced/inner/two-line/recovery/deskew candidates, emits `CPU_ONNX_PP_OCR`, and falls back safely. Production parity completes when iOS runs an equivalent ONNX provider and both platforms pass real crop/video fixtures with benchmark/early-stop parity. |
+| 11 | PP-OCR native recognizer | Implemented locally / real-device validation pending | Real crop/video fixtures | Android/iOS emit typed OCR events from stable tracks with raw/enhanced/binary/top-line/bottom-line/inner-text plate crop evidence, verified/staged PP-OCR model and dictionary assets, and shared Dart dictionary/greedy CTC decoding tests. Android and iOS load the staged OCR dictionary/session, preprocess best plate crops into PaddleOCR `1x3x48x320` tensors, run CPU ONNX inference, greedily decode CTC output, rank enhanced/inner/two-line/recovery/deskew candidates, and emit `CPU_ONNX_PP_OCR` only when OCR returns a real normalized plate. Production parity completes when both platforms pass real crop/video fixtures with benchmark/early-stop parity. |
 | 12 | Malaysian validation | Scanner event path connected | OCR output, Dart/native bridge | Scanner OCR events now pass through Dart Malaysian normalization/validation before matching. Broader native fixture validation for all plate categories remains. |
 | 13 | Special-series probability | Scanner event path connected | OCR confidence, character evidence | Scanner OCR events now pass through special-series correction with character confidences, and runtime prefixes can be managed in Settings with native persistence. Broader field fixtures remain. |
 | 14 | Consensus | Scanner event path connected | Per-track OCR state | Flutter scanner now keeps per-track OCR votes, required vote counts, confidence gates, and alert cooldown state. |
@@ -113,16 +113,18 @@ Implement native scanner work in this order to reduce risk:
 | Camera interruption | Safe stop/reconnect/resume without crash. |
 | 30/60/120 minute scans | No memory leak or thermal crash. |
 
-## iOS ONNX Blocker
+## iOS ONNX Status
 
-Android can use `onnxruntime-android` through Gradle. The current iOS Flutter project is Swift Package Manager based and has no `ios/Podfile`; the previous CocoaPods-style ONNX attempt was removed because it broke the iOS build with missing `onnxruntime.h`.
+iOS now uses CocoaPods for `onnxruntime-objc` and bridges the official Objective-C runtime into Swift through `Runner-Bridging-Header.h`. The iOS scanner loads staged detector/OCR model paths, runs CPU ONNX YOLO detection, runs CPU ONNX PP-OCR from best evidence crops, emits provider/model status, and keeps the heuristic/fallback OCR safety path if a model or inference call fails.
 
-To finish iOS detector/OCR ONNX parity, choose one of these implementation routes:
+Local verification completed:
 
-1. Migrate the Flutter iOS project to CocoaPods and add the official ONNX Runtime Objective-C package, then bridge it into `AppDelegate.swift`.
-2. Add an official or internally approved Swift Package/binary XCFramework for ONNX Runtime, then wire the same detector and PP-OCR preprocessing/decoding flow used by Android.
+1. `pod install`
+2. `flutter build ios --debug --simulator`
+3. `flutter run -d F3EB29F9-D625-4AA7-8057-87D999C0FF5B --no-resident`
+4. `flutter build ios --release --no-codesign`
 
-Until one route is chosen and linked, iOS remains on the native AVFoundation camera/tracker/evidence/fallback OCR path.
+Remaining iOS work is external QA/signing: run on a physical iPhone with Apple Developer signing, validate real camera/OCR output, and archive/sign for TestFlight or App Store distribution.
 
 ## Browser Code Removal Rule
 

@@ -55,8 +55,8 @@ Response:
 {
   "runtimeState": "READY",
   "deviceTier": "MEDIUM",
-  "detectorProvider": "CPU_ONNX/FALLBACK",
-  "ocrProvider": "CPU_ONNX_PP_OCR/FALLBACK",
+  "detectorProvider": "CPU_ONNX",
+  "ocrProvider": "CPU_ONNX_PP_OCR",
   "environmentProvider": "CPU",
   "plateQualityProvider": "HEURISTIC",
   "modelProviderStatus": {
@@ -176,7 +176,7 @@ Every event must contain:
   "temperatureState": "NOMINAL",
   "memoryMb": 184.2,
   "detectorProvider": "CPU_ONNX_READY/FALLBACK",
-  "ocrProvider": "CPU_ONNX_PP_OCR/FALLBACK",
+  "ocrProvider": "CPU_ONNX_PP_OCR",
   "environmentProvider": "CPU_ONNX_READY/FALLBACK",
   "plateQualityProvider": "NATIVE_HEURISTIC",
   "modelProviderStatus": {

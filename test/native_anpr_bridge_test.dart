@@ -20,8 +20,8 @@ void main() {
       'cameraFps': 29.8,
       'detectorFps': 9.6,
       'ocrQueueDepth': 0,
-      'detectorProvider': 'NATIVE_HEURISTIC',
-      'ocrProvider': 'NATIVE_FALLBACK_OCR',
+      'detectorProvider': 'CPU_ONNX',
+      'ocrProvider': 'CPU_ONNX_PP_OCR',
       'environmentProvider': 'NATIVE_HEURISTIC',
       'plateQualityProvider': 'NATIVE_HEURISTIC',
       'environmentLabel': 'GLARE',
@@ -32,8 +32,8 @@ void main() {
 
     expect(event, isA<RuntimeAnprEvent>());
     final runtime = event as RuntimeAnprEvent;
-    expect(runtime.detectorProvider, 'NATIVE_HEURISTIC');
-    expect(runtime.ocrProvider, 'NATIVE_FALLBACK_OCR');
+    expect(runtime.detectorProvider, 'CPU_ONNX');
+    expect(runtime.ocrProvider, 'CPU_ONNX_PP_OCR');
     expect(runtime.environmentLabel, 'GLARE');
     expect(runtime.environmentConfidence, 0.88);
     expect(runtime.plateQualityClass, 'GLARE_REFLECTION');

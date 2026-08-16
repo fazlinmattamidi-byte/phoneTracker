@@ -39,6 +39,8 @@ The Android toolchain is configured and a debug APK builds at `build/app/outputs
 
 The iOS project includes a local `scripts/codesign-wrapper/codesign` helper and Xcode `OTHER_CODE_SIGN_FLAGS=--strip-disallowed-xattrs` because this macOS/Xcode setup keeps sticky Apple extended attributes on generated Flutter/Xcode build products.
 
+The iOS scanner uses CocoaPods for `onnxruntime-objc`; after changing `ios/Podfile`, run `cd ios` then `pod install` before opening `ios/Runner.xcworkspace` or building from Flutter.
+
 Do not delete the existing browser source until the native replacement passes the verification gates in `docs/mobile-migration-map.md`.
 
 ## Production Pipeline

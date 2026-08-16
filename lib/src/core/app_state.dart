@@ -87,6 +87,33 @@ class AppState extends ChangeNotifier {
   bool get canManageSystem => role == Role.superAdmin;
   String get runtimeSpecialSeriesPrefixText =>
       runtimeSpecialSeriesPrefixes.join(', ');
+  List<HistoryLog> get visibleHistory {
+    final user = currentUser;
+    final adminUserIds = users
+        .where((item) => item.createdBy == user?.id)
+        .map((item) => item.id)
+        .toSet();
+    return history.where((log) {
+      final searchOrDetectionOnly =
+          log.type == 'SEARCH' || log.type == 'DETECTION';
+      switch (role) {
+        case Role.user:
+          if (!searchOrDetectionOnly) return false;
+          return log.actorId == null ||
+              log.actorId == user?.id ||
+              log.userRole == Role.user;
+        case Role.admin:
+          if (log.actorId != null) {
+            return log.actorId == user?.id ||
+                adminUserIds.contains(log.actorId);
+          }
+          return log.userRole == Role.admin || log.userRole == Role.user;
+        case Role.superAdmin:
+          return true;
+      }
+    }).toList();
+  }
+
   String t(String key) => localizedText(language, key);
 
   int get bottomIndex {
@@ -325,6 +352,17 @@ class AppState extends ChangeNotifier {
           '${vehicle.brand} ${vehicle.model} removed from local repository',
       statusMatch: 'DELETED',
     );
+  }
+
+  void setVehicleStatus(Vehicle vehicle, VehicleStatus status) {
+    final index = vehicles.indexWhere((item) => item.id == vehicle.id);
+    if (index == -1) return;
+    vehicles[index] = vehicles[index].copyWith(
+      status: status,
+      updatedDate: DateTime.now().toUtc(),
+    );
+    _queueLocalRepositoryPersist();
+    notifyListeners();
   }
 
   VehicleImportSummary importVehiclesFromCsv(String csv) {

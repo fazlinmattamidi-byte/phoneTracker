@@ -83,12 +83,14 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
   private var lastRuntimeDetectorCount = 0
   private var lastRuntimeSample = Date()
   private let nativeTracker = NativeTrackEngine()
-  private let fallbackOcrPlates = ["ANN7569", "ABC1234", "KV1234E", "SAB1234", "W8821B"]
+  private let ortRuntime = PlateqOrtRuntime()
 
   func handle(call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "initialize":
+      let args = call.arguments as? [String: Any]
       requestCameraPermissionIfNeeded()
+      ortRuntime.initialize(stagedModelAssets: readStagedModelAssets(args))
       result(runtimeStatus())
       emitRuntime(scanning ? "SCANNING" : "READY")
     case "listCameras":
@@ -101,6 +103,12 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
         requestCameraPermissionIfNeeded()
         emitError(code: "CAMERA_PERMISSION", message: "Camera permission is required before scanning.", recoverable: true)
         result(FlutterError(code: "CAMERA_PERMISSION", message: "Camera permission is required before scanning.", details: nil))
+        return
+      }
+      guard ortRuntime.realScannerReady() else {
+        let message = "Native detector and OCR models must be initialized before scanning."
+        emitError(code: "MODEL_NOT_READY", message: message, recoverable: true)
+        result(FlutterError(code: "MODEL_NOT_READY", message: message, details: ortRuntime.warnings()))
         return
       }
       let args = call.arguments as? [String: Any]
@@ -136,6 +144,7 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
       stopTimer()
       scanning = false
       nativeTracker.reset()
+      ortRuntime.close()
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -158,14 +167,16 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
     if !hasCameraPermission() {
       warnings.append("Camera permission has not been granted yet.")
     }
+    warnings.append(contentsOf: ortRuntime.warnings())
     return [
       "runtimeState": scanning ? "SCANNING" : "READY",
       "deviceTier": deviceTier(),
-      "detectorProvider": "NATIVE_HEURISTIC",
-      "ocrProvider": "NATIVE_FALLBACK_OCR",
-      "environmentProvider": "NATIVE_HEURISTIC",
-      "plateQualityProvider": "NATIVE_HEURISTIC",
-      "warnings": warnings,
+      "detectorProvider": detectorProviderLabel(),
+      "ocrProvider": ocrProviderLabel(),
+      "environmentProvider": environmentProviderLabel(),
+      "plateQualityProvider": plateQualityProviderLabel(),
+      "warnings": Array(Set(warnings)).sorted(),
+      "modelProviderStatus": ortRuntime.status(),
     ]
   }
 
@@ -275,10 +286,11 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
       "frameHeight": lastFrameHeight,
       "frameRotation": lastFrameRotation,
       "frameCount": frameCount,
-      "detectorProvider": "NATIVE_HEURISTIC",
-      "ocrProvider": "NATIVE_FALLBACK_OCR",
-      "environmentProvider": "NATIVE_HEURISTIC",
-      "plateQualityProvider": "NATIVE_HEURISTIC",
+      "detectorProvider": detectorProviderLabel(),
+      "ocrProvider": ocrProviderLabel(),
+      "environmentProvider": environmentProviderLabel(),
+      "plateQualityProvider": plateQualityProviderLabel(),
+      "modelProviderStatus": ortRuntime.status(),
       "environmentLabel": lastEnvironmentLabel,
       "environmentConfidence": lastEnvironmentConfidence,
       "environmentStats": [
@@ -316,7 +328,8 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
       ? NativeFrameAnalyzer.analyze(
         pixelBuffer: pixelBuffer,
         frameNumber: nextFrame,
-        threshold: settingDouble("detectionThreshold", fallback: 0.35)
+        threshold: settingDouble("detectionThreshold", fallback: 0.35),
+        ortRuntime: ortRuntime
       )
       : nil
     let evidenceFrame = analysis == nil ? nil : NativeEvidenceFrame.fromPixelBuffer(pixelBuffer)
@@ -336,7 +349,7 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
       self.lastPlateQualityScore = analysis.qualityScore
       self.lastPlateQualityClass = analysis.qualityClass
       self.nativeTracker.update(
-        detection: analysis.detection,
+        detections: analysis.detections,
         evidenceFrame: evidenceFrame,
         frameNumber: self.frameCount,
         timestampMs: Int(Date().timeIntervalSince1970 * 1000),
@@ -364,14 +377,14 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
       maxCount: effectiveOcrConcurrency()
     )
     for track in candidates {
-      let normalizedPlate = fallbackPlate(for: track.trackNumber)
-      let confidence = roundMetric(
-        clamp(
-          0.58 + track.qualityScore * 0.26 + track.detectorConfidence * 0.14,
-          0.0,
-          0.96
-        )
-      )
+      let nativeOcr = track.recognizeBestPlate(ortRuntime: ortRuntime)
+      guard let nativeOcr, !nativeOcr.normalizedPlate.isEmpty else {
+        track.markOcrAttempt(frameNumber: frameCount)
+        continue
+      }
+      let normalizedPlate = nativeOcr.normalizedPlate
+      let confidence = nativeOcr.confidence
+      let characterConfidences = nativeOcr.characterConfidences
       track.markOcr(plate: normalizedPlate, confidence: confidence, frameNumber: frameCount)
       let evidencePaths = track.writeBestEvidenceFiles(
         cacheDirectory: evidenceCacheDirectory(),
@@ -382,14 +395,14 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
         "timestamp": timestamp(),
         "platform": "ios",
         "trackId": "track-\(track.trackNumber)",
-        "rawText": normalizedPlate,
+        "rawText": nativeOcr.rawText,
         "normalizedPlate": normalizedPlate,
         "displayPlate": displayPlate(normalizedPlate),
         "confidence": confidence,
-        "layout": "SINGLE_LINE",
-        "category": "STANDARD",
-        "patternScore": confidence,
-        "provider": "NATIVE_FALLBACK_OCR",
+        "layout": nativeOcr.layout,
+        "category": nativeOcr.category,
+        "patternScore": nativeOcr.patternScore,
+        "provider": nativeOcr.provider,
         "vehicleImagePath": evidencePaths?.vehicleImagePath ?? "",
         "plateImagePath": evidencePaths?.plateImagePath ?? "",
         "plateEnhancedImagePath": evidencePaths?.plateEnhancedImagePath ?? "",
@@ -399,22 +412,41 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
         "plateInnerTextImagePath": evidencePaths?.plateInnerTextImagePath ?? "",
         "plateCropWidth": evidencePaths?.plateCropWidth ?? 0,
         "plateCropHeight": evidencePaths?.plateCropHeight ?? 0,
-        "preprocessingVariant": evidencePaths?.preprocessingVariant ?? "RAW_CROP",
-        "preprocessingVariants": evidencePaths?.preprocessingVariants ?? [],
-        "characterConfidences": normalizedPlate.enumerated().map { index, character in
-          [
-            "char": String(character),
-            "confidence": roundMetric(max(0.50, confidence - Double(index) * 0.006)),
-            "position": index,
-          ]
-        },
+        "preprocessingVariant": nativeOcr.preprocessingVariant,
+        "preprocessingVariants": mergePreprocessingVariants(
+          evidencePaths?.preprocessingVariants,
+          nativeOcr.preprocessingVariant
+        ),
+        "characterConfidences": characterConfidences.map { $0.toMap() },
       ])
     }
   }
 
-  private func fallbackPlate(for trackNumber: Int) -> String {
-    let index = max(0, (trackNumber - 1) % fallbackOcrPlates.count)
-    return fallbackOcrPlates[index]
+  private func mergePreprocessingVariants(_ evidenceVariants: [String]?, _ ocrVariant: String?) -> [String] {
+    var variants: [String] = []
+    for variant in evidenceVariants ?? [] where !variant.isEmpty && !variants.contains(variant) {
+      variants.append(variant)
+    }
+    if let ocrVariant, !ocrVariant.isEmpty, !variants.contains(ocrVariant) {
+      variants.append(ocrVariant)
+    }
+    return variants.isEmpty ? ["RAW_CROP"] : variants
+  }
+
+  private func detectorProviderLabel() -> String {
+    ortRuntime.providerLabel(id: "detector", fallback: "UNAVAILABLE")
+  }
+
+  private func ocrProviderLabel() -> String {
+    ortRuntime.providerLabel(id: "ocr", fallback: "UNAVAILABLE")
+  }
+
+  private func environmentProviderLabel() -> String {
+    ortRuntime.providerLabel(id: "environment", fallback: "NATIVE_HEURISTIC")
+  }
+
+  private func plateQualityProviderLabel() -> String {
+    ortRuntime.providerLabel(id: "plateQuality", fallback: "NATIVE_HEURISTIC")
   }
 
   private func displayPlate(_ plate: String) -> String {
@@ -515,6 +547,16 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
     return fallback
   }
 
+  private func readStagedModelAssets(_ args: [String: Any]?) -> [String: String] {
+    guard let staged = args?["stagedModelAssets"] as? [String: Any] else { return [:] }
+    return staged.reduce(into: [String: String]()) { result, entry in
+      let path = String(describing: entry.value)
+      if !entry.key.isEmpty, !path.isEmpty {
+        result[entry.key] = path
+      }
+    }
+  }
+
   private func emitError(code: String, message: String, recoverable: Bool) {
     eventSink?([
       "type": "error",
@@ -539,6 +581,803 @@ final class PlateqNativeBridge: NSObject, FlutterStreamHandler {
   private func timestamp() -> String {
     ISO8601DateFormatter().string(from: Date())
   }
+}
+
+private let ppOcrTargetWidth = 320
+private let ppOcrTargetHeight = 48
+
+private struct NativeOcrCharacterConfidence {
+  let char: String
+  let confidence: Double
+  let position: Int
+
+  func toMap() -> [String: Any] {
+    [
+      "char": char,
+      "confidence": confidence,
+      "position": position,
+    ]
+  }
+}
+
+private struct NativeOcrResult {
+  let rawText: String
+  let normalizedPlate: String
+  let confidence: Double
+  let characterConfidences: [NativeOcrCharacterConfidence]
+  let layout: String
+  let category: String
+  let patternScore: Double
+  let provider: String
+  let preprocessingVariant: String
+}
+
+private struct NativePpOcrDecodeResult {
+  let rawText: String
+  let confidence: Double
+  let characterConfidences: [NativeOcrCharacterConfidence]
+}
+
+private final class PlateqOrtRuntime {
+  private let lock = NSLock()
+  private var environment: ORTEnv?
+  private var sessions: [String: OrtModelSession] = [:]
+  private var errors: [String: String] = [:]
+  private var ocrDictionary: [String] = []
+  private var lastDetectorInferenceError: String?
+  private var lastOcrInferenceError: String?
+
+  func initialize(stagedModelAssets: [String: String]) {
+    lock.lock()
+    defer { lock.unlock() }
+    closeLocked()
+    loadOcrDictionary(stagedModelAssets["ocrDictionary"])
+    let onnxAssets = [
+      "detector": stagedModelAssets["detector"],
+      "ocr": stagedModelAssets["ocr"],
+      "environment": stagedModelAssets["environment"],
+      "plateQuality": stagedModelAssets["plateQuality"],
+    ]
+    for (id, path) in onnxAssets {
+      guard let path, !path.isEmpty else {
+        if id != "plateQuality" {
+          errors[id] = "Native model path was not staged."
+        }
+        continue
+      }
+      loadSession(id: id, path: path)
+    }
+  }
+
+  func recognizePlateCrop(
+    crop: UIImage,
+    preprocessingVariant: String,
+    layout: String
+  ) -> NativeOcrResult? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let model = sessions["ocr"], !ocrDictionary.isEmpty else { return nil }
+    do {
+      let inputData = PpOcrTensor.fromImage(crop)
+      let output = try runFloatModel(
+        model: model,
+        inputData: inputData,
+        inputShape: [
+          NSNumber(value: 1),
+          NSNumber(value: 3),
+          NSNumber(value: ppOcrTargetHeight),
+          NSNumber(value: ppOcrTargetWidth),
+        ]
+      )
+      let decoded = decodePpOcrOutput(raw: output.values, dims: output.shape)
+      let normalized = normalizeNativePlate(decoded.rawText)
+      guard normalized.count >= 2 else { return nil }
+      let patternScore = nativePatternScore(normalized)
+      lastOcrInferenceError = nil
+      return NativeOcrResult(
+        rawText: decoded.rawText,
+        normalizedPlate: normalized,
+        confidence: roundMetric(decoded.confidence),
+        characterConfidences: normalizeNativeCharacterConfidences(decoded: decoded, normalizedPlate: normalized),
+        layout: layout,
+        category: nativePlateCategory(normalized),
+        patternScore: patternScore,
+        provider: "CPU_ONNX_PP_OCR",
+        preprocessingVariant: preprocessingVariant
+      )
+    } catch {
+      lastOcrInferenceError = error.localizedDescription
+      return nil
+    }
+  }
+
+  func detectPlates(pixelBuffer: CVPixelBuffer, minConfidence: Double) -> [NativeOnnxDetection] {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let model = sessions["detector"] else { return [] }
+    do {
+      let inputData = ImageLetterboxTensor.fromPixelBuffer(pixelBuffer)
+      let output = try runFloatModel(
+        model: model,
+        inputData: inputData.tensor,
+        inputShape: [
+          NSNumber(value: 1),
+          NSNumber(value: 3),
+          NSNumber(value: ImageLetterboxTensor.targetSize),
+          NSNumber(value: ImageLetterboxTensor.targetSize),
+        ]
+      )
+      let detections = decodeYoloOutput(
+        raw: output.values,
+        dims: output.shape,
+        imageWidth: CVPixelBufferGetWidth(pixelBuffer),
+        imageHeight: CVPixelBufferGetHeight(pixelBuffer),
+        letterbox: inputData.letterbox,
+        minConfidence: minConfidence
+      )
+      lastDetectorInferenceError = nil
+      return detections
+    } catch {
+      lastDetectorInferenceError = error.localizedDescription
+      return []
+    }
+  }
+
+  func realScannerReady() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return sessions["detector"] != nil &&
+      sessions["ocr"] != nil &&
+      !ocrDictionary.isEmpty
+  }
+
+  func providerLabel(id: String, fallback: String) -> String {
+    lock.lock()
+    defer { lock.unlock() }
+    guard sessions[id] != nil else { return fallback }
+    switch id {
+    case "detector":
+      return lastDetectorInferenceError == nil ? "CPU_ONNX" : "CPU_ONNX_ERROR"
+    case "ocr":
+      return !ocrDictionary.isEmpty && lastOcrInferenceError == nil ? "CPU_ONNX_PP_OCR" : "CPU_ONNX_PP_OCR_ERROR"
+    default:
+      return "CPU_ONNX_READY"
+    }
+  }
+
+  func warnings() -> [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    var output = errors
+      .sorted { $0.key < $1.key }
+      .map { "ONNX \($0.key) unavailable: \($0.value)" }
+    if let lastDetectorInferenceError {
+      output.append("ONNX detector inference unavailable: \(lastDetectorInferenceError)")
+    }
+    if let lastOcrInferenceError {
+      output.append("ONNX OCR inference unavailable: \(lastOcrInferenceError)")
+    }
+    return output
+  }
+
+  func status() -> [String: Any] {
+    lock.lock()
+    defer { lock.unlock() }
+    let ids = ["detector", "ocr", "environment", "plateQuality"]
+    return ids.reduce(into: [String: Any]()) { result, id in
+      if let session = sessions[id] {
+        let extra: [String: Any]
+        switch id {
+        case "detector":
+          extra = ["lastInferenceError": lastDetectorInferenceError as Any]
+        case "ocr":
+          extra = [
+            "dictionaryReady": !ocrDictionary.isEmpty,
+            "dictionaryEntries": ocrDictionary.count,
+            "lastInferenceError": lastOcrInferenceError as Any,
+          ]
+        default:
+          extra = [:]
+        }
+        result[id] = session.toMap(extra: extra)
+      } else {
+        result[id] = [
+          "state": "UNAVAILABLE",
+          "error": errors[id] as Any,
+        ]
+      }
+    }
+  }
+
+  func close() {
+    lock.lock()
+    defer { lock.unlock() }
+    closeLocked()
+  }
+
+  private func closeLocked() {
+    sessions.removeAll()
+    errors.removeAll()
+    ocrDictionary = []
+    lastDetectorInferenceError = nil
+    lastOcrInferenceError = nil
+    environment = nil
+  }
+
+  private func loadOcrDictionary(_ path: String?) {
+    guard let path, !path.isEmpty else {
+      errors["ocrDictionary"] = "Native dictionary path was not staged."
+      return
+    }
+    guard FileManager.default.fileExists(atPath: path) else {
+      errors["ocrDictionary"] = "File missing at \(path)"
+      return
+    }
+    do {
+      var entries = try String(contentsOfFile: path, encoding: .utf8)
+        .components(separatedBy: .newlines)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+      entries.append(" ")
+      ocrDictionary = entries
+    } catch {
+      errors["ocrDictionary"] = error.localizedDescription
+      ocrDictionary = []
+    }
+  }
+
+  private func loadSession(id: String, path: String) {
+    guard FileManager.default.fileExists(atPath: path) else {
+      errors[id] = "File missing at \(path)"
+      return
+    }
+    let sizeBytes = fileSize(path)
+    guard sizeBytes > 0 else {
+      errors[id] = "File empty at \(path)"
+      return
+    }
+    do {
+      let env = try environment ?? ORTEnv(loggingLevel: .warning)
+      environment = env
+      let options = try ORTSessionOptions()
+      try options.setGraphOptimizationLevel(.all)
+      let session = try ORTSession(env: env, modelPath: path, sessionOptions: options)
+      sessions[id] = OrtModelSession(
+        id: id,
+        nativePath: path,
+        sizeBytes: sizeBytes,
+        session: session,
+        inputNames: try session.inputNames(),
+        outputNames: try session.outputNames()
+      )
+    } catch {
+      errors[id] = error.localizedDescription
+    }
+  }
+
+  private func fileSize(_ path: String) -> Int64 {
+    let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+    return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+  }
+
+  private func runFloatModel(
+    model: OrtModelSession,
+    inputData: [Float],
+    inputShape: [NSNumber]
+  ) throws -> (values: [Float], shape: [Int]) {
+    let tensorBytes = inputData.withUnsafeBufferPointer { buffer -> NSMutableData in
+      NSMutableData(
+        bytes: buffer.baseAddress!,
+        length: buffer.count * MemoryLayout<Float>.stride
+      )
+    }
+    let tensor = try ORTValue(
+      tensorData: tensorBytes,
+      elementType: .float,
+      shape: inputShape
+    )
+    let outputs = try model.session.run(
+      withInputs: [model.primaryInputName("images"): tensor],
+      outputNames: Set(model.outputNames),
+      runOptions: nil
+    )
+    guard let outputValue = model.outputNames.compactMap({ outputs[$0] }).first else {
+      return ([], [])
+    }
+    let shape = try outputValue.tensorTypeAndShapeInfo().shape.map { $0.intValue }
+    let outputData = try outputValue.tensorData()
+    let count = outputData.length / MemoryLayout<Float>.stride
+    let pointer = outputData.bytes.bindMemory(to: Float.self, capacity: count)
+    let values = Array(UnsafeBufferPointer(start: pointer, count: count))
+    return (values, shape)
+  }
+
+  private func decodePpOcrOutput(raw: [Float], dims: [Int]) -> NativePpOcrDecodeResult {
+    let positiveDims = dims.filter { $0 > 0 }
+    guard positiveDims.count >= 2, !raw.isEmpty else {
+      return NativePpOcrDecodeResult(rawText: "", confidence: 0.0, characterConfidences: [])
+    }
+
+    let expectedClassCount = ocrDictionary.count + 1
+    let sequenceLength: Int
+    let classCount: Int
+    let transposed: Bool
+    if positiveDims.count >= 3 {
+      let middle = positiveDims[positiveDims.count - 2]
+      let last = positiveDims.last ?? 0
+      transposed = middle == expectedClassCount && last != expectedClassCount
+      sequenceLength = transposed ? last : middle
+      classCount = transposed ? middle : last
+    } else {
+      sequenceLength = positiveDims[0]
+      classCount = positiveDims[1]
+      transposed = false
+    }
+    guard sequenceLength > 0, classCount > 0 else {
+      return NativePpOcrDecodeResult(rawText: "", confidence: 0.0, characterConfidences: [])
+    }
+
+    var chars: [String] = []
+    var characterConfidences: [NativeOcrCharacterConfidence] = []
+    var previousIndex = 0
+    let maxTimesteps = min(sequenceLength, max(1, raw.count / max(1, classCount)))
+    for timestep in 0..<maxTimesteps {
+      var maxIndex = 0
+      var maxScore = -Float.greatestFiniteMagnitude
+      for classIndex in 0..<classCount {
+        let offset = transposed
+          ? classIndex * sequenceLength + timestep
+          : timestep * classCount + classIndex
+        let score = offset >= 0 && offset < raw.count ? raw[offset] : -Float.greatestFiniteMagnitude
+        if score > maxScore {
+          maxScore = score
+          maxIndex = classIndex
+        }
+      }
+      if maxIndex != 0, maxIndex != previousIndex {
+        let dictionaryIndex = maxIndex - 1
+        if dictionaryIndex >= 0, dictionaryIndex < ocrDictionary.count {
+          let char = ocrDictionary[dictionaryIndex]
+          if !char.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            chars.append(char)
+            characterConfidences.append(
+              NativeOcrCharacterConfidence(
+                char: char,
+                confidence: roundMetric(clamp(Double(maxScore), 0.0, 1.0)),
+                position: characterConfidences.count
+              )
+            )
+          }
+        }
+      }
+      previousIndex = maxIndex
+    }
+
+    let confidence = characterConfidences.isEmpty
+      ? 0.0
+      : characterConfidences.map(\.confidence).reduce(0.0, +) / Double(characterConfidences.count)
+    return NativePpOcrDecodeResult(
+      rawText: chars.joined(),
+      confidence: confidence,
+      characterConfidences: characterConfidences
+    )
+  }
+
+  private func normalizeNativeCharacterConfidences(
+    decoded: NativePpOcrDecodeResult,
+    normalizedPlate: String
+  ) -> [NativeOcrCharacterConfidence] {
+    let cleaned = decoded.characterConfidences.compactMap { item -> NativeOcrCharacterConfidence? in
+      let normalizedChar = normalizeNativePlate(item.char)
+      guard normalizedChar.count == 1 else { return nil }
+      return NativeOcrCharacterConfidence(char: normalizedChar, confidence: item.confidence, position: item.position)
+    }
+    if cleaned.count == normalizedPlate.count {
+      return cleaned.enumerated().map { index, item in
+        NativeOcrCharacterConfidence(char: item.char, confidence: item.confidence, position: index)
+      }
+    }
+    return normalizedPlate.enumerated().map { index, character in
+      NativeOcrCharacterConfidence(
+        char: String(character),
+        confidence: roundMetric(decoded.confidence),
+        position: index
+      )
+    }
+  }
+
+  private func decodeYoloOutput(
+    raw: [Float],
+    dims: [Int],
+    imageWidth: Int,
+    imageHeight: Int,
+    letterbox: YoloLetterbox,
+    minConfidence: Double
+  ) -> [NativeOnnxDetection] {
+    guard imageWidth > 0, imageHeight > 0, dims.count >= 2, !raw.isEmpty else { return [] }
+    let shape = YoloOutputShape.fromDims(dims)
+    let hasObjectness = shape.channelCount == 6 || shape.channelCount == 85
+    let minBoxWidth = max(32.0, Double(imageWidth) * 0.022)
+    let minBoxHeight = max(9.0, Double(imageHeight) * 0.008)
+    var candidates: [YoloCandidate] = []
+
+    for index in 0..<shape.sequenceLength {
+      func read(_ channel: Int) -> Double {
+        let offset = shape.transposed
+          ? index * shape.channelCount + channel
+          : channel * shape.sequenceLength + index
+        guard offset >= 0, offset < raw.count else { return Double.nan }
+        return Double(raw[offset])
+      }
+
+      let cx = read(0)
+      let cy = read(1)
+      let width = read(2)
+      let height = read(3)
+      let objectness = hasObjectness ? read(4) : 1.0
+      let classChannel = hasObjectness ? 5 : 4
+      let classConfidence = read(classChannel)
+      let confidence = objectness * classConfidence
+
+      guard [cx, cy, width, height, confidence].allSatisfy({ $0.isFinite }),
+            confidence >= minConfidence else {
+        continue
+      }
+
+      let realCx = (cx - Double(letterbox.padX)) / letterbox.scale
+      let realCy = (cy - Double(letterbox.padY)) / letterbox.scale
+      let realWidth = width / letterbox.scale
+      let realHeight = height / letterbox.scale
+      let left = clamp(realCx - realWidth / 2.0, 0.0, Double(imageWidth))
+      let top = clamp(realCy - realHeight / 2.0, 0.0, Double(imageHeight))
+      let right = clamp(realCx + realWidth / 2.0, 0.0, Double(imageWidth))
+      let bottom = clamp(realCy + realHeight / 2.0, 0.0, Double(imageHeight))
+      let finalWidth = round(right - left)
+      let finalHeight = round(bottom - top)
+
+      if finalWidth >= minBoxWidth, finalHeight >= minBoxHeight {
+        candidates.append(
+          YoloCandidate(
+            x: round(left),
+            y: round(top),
+            width: finalWidth,
+            height: finalHeight,
+            confidence: roundMetric(confidence)
+          )
+        )
+      }
+    }
+
+    return applyYoloFiltersAndNms(candidates, imageWidth: imageWidth, imageHeight: imageHeight)
+      .map { candidate in
+        NativeOnnxDetection(
+          bbox: NativeBbox(
+            x: roundMetric(candidate.x / Double(imageWidth)),
+            y: roundMetric(candidate.y / Double(imageHeight)),
+            width: roundMetric(candidate.width / Double(imageWidth)),
+            height: roundMetric(candidate.height / Double(imageHeight))
+          ),
+          confidence: candidate.confidence
+        )
+      }
+  }
+
+  private func applyYoloFiltersAndNms(
+    _ candidates: [YoloCandidate],
+    imageWidth: Int,
+    imageHeight: Int,
+    iouThreshold: Double = 0.35
+  ) -> [YoloCandidate] {
+    let minWidth = max(28.0, Double(imageWidth) * 0.018)
+    let minHeight = max(8.0, Double(imageHeight) * 0.007)
+    let filtered = candidates.filter { candidate in
+      guard candidate.width >= minWidth, candidate.height >= minHeight, candidate.height > 0.0 else { return false }
+      let aspectRatio = candidate.width / candidate.height
+      return aspectRatio >= 0.65 && aspectRatio <= 7.2
+    }
+    let frameArea = imageWidth * imageHeight
+    let sorted = filtered.sorted { $0.rank(frameArea: frameArea) > $1.rank(frameArea: frameArea) }
+    var selected: [YoloCandidate] = []
+    for candidate in sorted {
+      let keep = selected.allSatisfy { existing in
+        candidate.iou(existing) <= min(iouThreshold, 0.35) && !candidate.isMostlyContained(by: existing)
+      }
+      if keep {
+        selected.append(candidate)
+      }
+      if selected.count >= 12 { break }
+    }
+    return selected
+  }
+}
+
+private struct OrtModelSession {
+  let id: String
+  let nativePath: String
+  let sizeBytes: Int64
+  let session: ORTSession
+  let inputNames: [String]
+  let outputNames: [String]
+
+  func primaryInputName(_ fallback: String) -> String {
+    inputNames.first ?? fallback
+  }
+
+  func toMap(extra: [String: Any] = [:]) -> [String: Any] {
+    [
+      "state": "READY",
+      "id": id,
+      "nativePath": nativePath,
+      "sizeBytes": sizeBytes,
+      "inputNames": inputNames,
+      "outputNames": outputNames,
+    ].merging(extra) { _, new in new }
+  }
+}
+
+private struct NativeOnnxDetection {
+  let bbox: NativeBbox
+  let confidence: Double
+}
+
+private enum PpOcrTensor {
+  static func fromImage(_ source: UIImage) -> [Float] {
+    let width = ppOcrTargetWidth
+    let height = ppOcrTargetHeight
+    var pixels = [UInt8](repeating: 127, count: width * height * 4)
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+      data: &pixels,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: width * 4,
+      space: colorSpace,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+      return [Float](repeating: 0.0, count: width * height * 3)
+    }
+    context.setFillColor(UIColor(red: 0.498, green: 0.498, blue: 0.498, alpha: 1).cgColor)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+    if let cgImage = source.cgImage {
+      let scale = min(
+        CGFloat(width) / max(1.0, CGFloat(cgImage.width)),
+        CGFloat(height) / max(1.0, CGFloat(cgImage.height))
+      )
+      let drawWidth = max(1.0, CGFloat(cgImage.width) * scale)
+      let drawHeight = max(1.0, CGFloat(cgImage.height) * scale)
+      let offsetY = (CGFloat(height) - drawHeight) / 2.0
+      context.interpolationQuality = .high
+      context.draw(
+        cgImage,
+        in: CGRect(x: 0, y: offsetY, width: min(CGFloat(width), drawWidth), height: drawHeight)
+      )
+    }
+
+    let area = width * height
+    var tensor = [Float](repeating: 0.0, count: area * 3)
+    for index in 0..<area {
+      let offset = index * 4
+      tensor[index] = normalizePpOcrChannel(pixels[offset])
+      tensor[area + index] = normalizePpOcrChannel(pixels[offset + 1])
+      tensor[area * 2 + index] = normalizePpOcrChannel(pixels[offset + 2])
+    }
+    return tensor
+  }
+
+  private static func normalizePpOcrChannel(_ value: UInt8) -> Float {
+    Float((Double(value) / 255.0 - 0.5) / 0.5)
+  }
+}
+
+private struct ImageLetterboxTensor {
+  static let targetSize = 640
+  let tensor: [Float]
+  let letterbox: YoloLetterbox
+
+  static func fromPixelBuffer(_ pixelBuffer: CVPixelBuffer) -> ImageLetterboxTensor {
+    let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+    let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+    let letterbox = YoloLetterbox(sourceWidth: sourceWidth, sourceHeight: sourceHeight, targetSize: targetSize)
+    let area = targetSize * targetSize
+    var tensor = [Float](repeating: 127.0 / 255.0, count: area * 3)
+    guard sourceWidth > 0, sourceHeight > 0 else {
+      return ImageLetterboxTensor(tensor: tensor, letterbox: letterbox)
+    }
+
+    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+    let context = CIContext()
+    guard let cgImage = context.createCGImage(ciImage, from: CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)) else {
+      return ImageLetterboxTensor(tensor: tensor, letterbox: letterbox)
+    }
+
+    var pixels = [UInt8](repeating: 127, count: area * 4)
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let drawContext = CGContext(
+      data: &pixels,
+      width: targetSize,
+      height: targetSize,
+      bitsPerComponent: 8,
+      bytesPerRow: targetSize * 4,
+      space: colorSpace,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+      return ImageLetterboxTensor(tensor: tensor, letterbox: letterbox)
+    }
+    drawContext.setFillColor(UIColor(red: 0.498, green: 0.498, blue: 0.498, alpha: 1).cgColor)
+    drawContext.fill(CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
+    drawContext.interpolationQuality = .high
+    drawContext.draw(
+      cgImage,
+      in: CGRect(
+        x: letterbox.padX,
+        y: letterbox.padY,
+        width: letterbox.drawWidth,
+        height: letterbox.drawHeight
+      )
+    )
+
+    for index in 0..<area {
+      let offset = index * 4
+      tensor[index] = Float(pixels[offset]) / 255.0
+      tensor[area + index] = Float(pixels[offset + 1]) / 255.0
+      tensor[area * 2 + index] = Float(pixels[offset + 2]) / 255.0
+    }
+    return ImageLetterboxTensor(tensor: tensor, letterbox: letterbox)
+  }
+}
+
+private struct YoloLetterbox {
+  let sourceWidth: Int
+  let sourceHeight: Int
+  let targetSize: Int
+  let scale: Double
+  let drawWidth: Int
+  let drawHeight: Int
+  let padX: Int
+  let padY: Int
+
+  init(sourceWidth: Int, sourceHeight: Int, targetSize: Int = 640) {
+    self.sourceWidth = sourceWidth
+    self.sourceHeight = sourceHeight
+    self.targetSize = targetSize
+    scale = min(Double(targetSize) / Double(max(1, sourceWidth)), Double(targetSize) / Double(max(1, sourceHeight)))
+    drawWidth = Int(round(Double(sourceWidth) * scale))
+    drawHeight = Int(round(Double(sourceHeight) * scale))
+    padX = Int(round((Double(targetSize - drawWidth)) / 2.0))
+    padY = Int(round((Double(targetSize - drawHeight)) / 2.0))
+  }
+}
+
+private struct YoloOutputShape {
+  let sequenceLength: Int
+  let channelCount: Int
+  let transposed: Bool
+
+  static func fromDims(_ dims: [Int]) -> YoloOutputShape {
+    let d1 = dims[max(0, dims.count - 2)]
+    let d2 = dims[max(0, dims.count - 1)]
+    if isYoloChannelCount(d2), !isYoloChannelCount(d1) {
+      return YoloOutputShape(sequenceLength: d1, channelCount: d2, transposed: true)
+    }
+    if isYoloChannelCount(d1), !isYoloChannelCount(d2) {
+      return YoloOutputShape(sequenceLength: d2, channelCount: d1, transposed: false)
+    }
+    return d1 > d2
+      ? YoloOutputShape(sequenceLength: d1, channelCount: d2, transposed: true)
+      : YoloOutputShape(sequenceLength: d2, channelCount: d1, transposed: false)
+  }
+
+  private static func isYoloChannelCount(_ value: Int) -> Bool {
+    value == 5 || value == 6 || value == 85
+  }
+}
+
+private struct YoloCandidate {
+  let x: Double
+  let y: Double
+  let width: Double
+  let height: Double
+  let confidence: Double
+
+  private var area: Double {
+    width * height
+  }
+
+  func iou(_ other: YoloCandidate) -> Double {
+    let left = max(x, other.x)
+    let top = max(y, other.y)
+    let right = min(x + width, other.x + other.width)
+    let bottom = min(y + height, other.y + other.height)
+    let intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    let union = area + other.area - intersection
+    return union <= 0.0 ? 0.0 : intersection / union
+  }
+
+  func rank(frameArea: Int) -> Double {
+    let areaScore = min(1.0, area / max(1.0, Double(frameArea) * 0.08))
+    return confidence * 0.68 + areaScore * 0.32
+  }
+
+  func isMostlyContained(by outer: YoloCandidate) -> Bool {
+    let centerX = x + width / 2.0
+    let centerY = y + height / 2.0
+    let centerInside =
+      centerX >= outer.x &&
+        centerX <= outer.x + outer.width &&
+        centerY >= outer.y &&
+        centerY <= outer.y + outer.height
+    return centerInside && area < outer.area * 0.65
+  }
+}
+
+private func normalizeNativePlate(_ raw: String) -> String {
+  raw.uppercased().filter { character in
+    character.unicodeScalars.allSatisfy { scalar in
+      (65...90).contains(Int(scalar.value)) || (48...57).contains(Int(scalar.value))
+    }
+  }
+}
+
+private func nativePatternScore(_ plate: String) -> Double {
+  if plate.count < 2 || plate.count > 10 { return 0.0 }
+  let letters = plate.filter(isNativeAsciiLetter).count
+  let digits = plate.filter(isNativeAsciiDigit).count
+  if letters == 0 || digits == 0 { return 0.16 }
+  let standard = matchesNativeRegex(plate, pattern: "^[A-Z]{1,3}[0-9]{1,4}[A-Z]?$")
+  let diplomatic = matchesNativeRegex(plate, pattern: "^[A-Z]{2}[0-9]{1,4}$")
+  let lengthScore = clamp01(Double(plate.count) / 7.0)
+  let structureScore = standard || diplomatic ? 0.58 : 0.30
+  let balanceScore = digits >= 2 && letters <= 5 ? 0.22 : 0.10
+  return roundMetric(clamp01(structureScore + balanceScore + lengthScore * 0.20))
+}
+
+private func nativePlateCategory(_ plate: String) -> String {
+  if matchesNativeRegex(plate, pattern: "^[A-Z]{1,3}[0-9]{1,4}[A-Z]?$") {
+    return "STANDARD"
+  }
+  if plate.count >= 2, plate.count <= 10, plate.contains(where: isNativeAsciiDigit), plate.contains(where: isNativeAsciiLetter) {
+    return "UNKNOWN_VALID_CANDIDATE"
+  }
+  return "UNKNOWN"
+}
+
+private func rankNativeOcrCandidate(_ candidate: NativeOcrResult) -> Double {
+  let hasLetters = candidate.normalizedPlate.contains(where: isNativeAsciiLetter)
+  let hasDigits = candidate.normalizedPlate.contains(where: isNativeAsciiDigit)
+  let lengthScore = clamp01(Double(candidate.normalizedPlate.count) / 7.0)
+  let layoutBonus = ["TWO_LINE", "SQUARE"].contains(candidate.layout) ? 0.06 : 0.0
+  let recoveryPenalty: Double
+  switch candidate.preprocessingVariant {
+  case "ROTATE_180":
+    recoveryPenalty = 0.04
+  case "DESKEWED_ROTATION":
+    recoveryPenalty = 0.02
+  default:
+    recoveryPenalty = 0.0
+  }
+  let implausiblePenalty = hasLetters && hasDigits ? 0.0 : 0.35
+  return candidate.confidence * 0.48 +
+    candidate.patternScore * 0.34 +
+    lengthScore * 0.14 +
+    layoutBonus -
+    recoveryPenalty -
+    implausiblePenalty
+}
+
+private func matchesNativeRegex(_ text: String, pattern: String) -> Bool {
+  text.range(of: pattern, options: .regularExpression) != nil
+}
+
+private func isNativeAsciiLetter(_ character: Character) -> Bool {
+  character.unicodeScalars.count == 1 &&
+    character.unicodeScalars.allSatisfy { (65...90).contains(Int($0.value)) || (97...122).contains(Int($0.value)) }
+}
+
+private func isNativeAsciiDigit(_ character: Character) -> Bool {
+  character.unicodeScalars.count == 1 &&
+    character.unicodeScalars.allSatisfy { (48...57).contains(Int($0.value)) }
 }
 
 private struct NativeDetection {
@@ -600,6 +1439,10 @@ private final class NativeEvidenceFrame {
 
   func release() {}
 
+  func copyFrame() -> NativeEvidenceFrame? {
+    NativeEvidenceFrame(image: image)
+  }
+
   static func fromPixelBuffer(_ pixelBuffer: CVPixelBuffer, maxLongEdge: CGFloat = 640) -> NativeEvidenceFrame? {
     let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
     let extent = ciImage.extent.integral
@@ -619,6 +1462,80 @@ private final class NativeEvidenceFrame {
       source.draw(in: CGRect(origin: .zero, size: targetSize))
     }
     return NativeEvidenceFrame(image: resized)
+  }
+
+  func recognizePlate(
+    ortRuntime: PlateqOrtRuntime,
+    bbox: NativeBbox,
+    qualityClass: String
+  ) -> NativeOcrResult? {
+    let plateCrop = crop(bbox)
+    var candidates: [NativeOcrResult] = []
+    let enhancedCrop = enhancePlateCrop(plateCrop)
+    let aspect = enhancedCrop.size.width / max(1.0, enhancedCrop.size.height)
+    let baseLayout: String
+    if aspect < 1.6 {
+      baseLayout = "SQUARE"
+    } else if aspect < 2.3 {
+      baseLayout = "TWO_LINE"
+    } else {
+      baseLayout = "SINGLE_LINE"
+    }
+
+    recognizeCandidate(
+      ortRuntime: ortRuntime,
+      crop: enhancedCrop,
+      preprocessingVariant: "ADAPTIVE_CONTRAST",
+      layout: baseLayout,
+      candidates: &candidates
+    )
+
+    let textCrop = innerTextCrop(enhancedCrop)
+    recognizeCandidate(
+      ortRuntime: ortRuntime,
+      crop: textCrop,
+      preprocessingVariant: "INNER_TEXT",
+      layout: baseLayout,
+      candidates: &candidates
+    )
+
+    if baseLayout != "SINGLE_LINE",
+       let twoLineCandidate = recognizeTwoLineCandidate(ortRuntime: ortRuntime, source: enhancedCrop, layout: baseLayout) {
+      candidates.append(twoLineCandidate)
+    }
+
+    let bestFirstPass = candidates.max { rankNativeOcrCandidate($0) < rankNativeOcrCandidate($1) }
+    let needsRecovery = bestFirstPass == nil ||
+      (bestFirstPass?.confidence ?? 0.0) < 0.42 ||
+      (bestFirstPass?.patternScore ?? 0.0) < 0.42
+    let shouldDeskew = qualityClass == "SLIGHT_ROTATION" || aspect < 2.0 || aspect > 5.8
+    if shouldDeskew {
+      for degrees in [-6.0, 6.0] {
+        let deskewed = rotatePlateCrop(enhancedCrop, degrees: -degrees)
+        recognizeCandidate(
+          ortRuntime: ortRuntime,
+          crop: deskewed,
+          preprocessingVariant: "DESKEWED_ROTATION",
+          layout: baseLayout,
+          candidates: &candidates
+        )
+      }
+    }
+
+    if needsRecovery {
+      let rotated = rotatePlateCrop(enhancedCrop, degrees: 180.0)
+      recognizeCandidate(
+        ortRuntime: ortRuntime,
+        crop: rotated,
+        preprocessingVariant: "ROTATE_180",
+        layout: baseLayout,
+        candidates: &candidates
+      )
+    }
+
+    return candidates
+      .filter { $0.normalizedPlate.count >= 2 }
+      .max { rankNativeOcrCandidate($0) < rankNativeOcrCandidate($1) }
   }
 
   func writeEvidenceFiles(cacheDirectory: URL, trackNumber: Int, bbox: NativeBbox, frameNumber: Int) -> NativeEvidencePaths? {
@@ -676,6 +1593,68 @@ private final class NativeEvidenceFrame {
     } catch {
       return nil
     }
+  }
+
+  private func recognizeCandidate(
+    ortRuntime: PlateqOrtRuntime,
+    crop: UIImage,
+    preprocessingVariant: String,
+    layout: String,
+    candidates: inout [NativeOcrResult]
+  ) {
+    if let result = ortRuntime.recognizePlateCrop(
+      crop: crop,
+      preprocessingVariant: preprocessingVariant,
+      layout: layout
+    ) {
+      candidates.append(result)
+    }
+  }
+
+  private func recognizeTwoLineCandidate(
+    ortRuntime: PlateqOrtRuntime,
+    source: UIImage,
+    layout: String
+  ) -> NativeOcrResult? {
+    let topLineCrop = splitPlateCrop(source, topHalf: true)
+    let bottomLineCrop = splitPlateCrop(source, topHalf: false)
+    let top = ortRuntime.recognizePlateCrop(
+      crop: topLineCrop,
+      preprocessingVariant: "TOP_LINE",
+      layout: "TWO_LINE"
+    )
+    let bottom = ortRuntime.recognizePlateCrop(
+      crop: bottomLineCrop,
+      preprocessingVariant: "BOTTOM_LINE",
+      layout: "TWO_LINE"
+    )
+    let rawText = (top?.normalizedPlate ?? "") + (bottom?.normalizedPlate ?? "")
+    let normalized = normalizeNativePlate(rawText)
+    guard normalized.count >= 2 else { return nil }
+    let confidenceValues = [top?.confidence, bottom?.confidence].compactMap { $0 }
+    let confidence = roundMetric(
+      confidenceValues.isEmpty
+        ? 0.0
+        : confidenceValues.reduce(0.0, +) / Double(confidenceValues.count)
+    )
+    let split = top?.normalizedPlate.count ?? 0
+    return NativeOcrResult(
+      rawText: rawText,
+      normalizedPlate: normalized,
+      confidence: confidence,
+      characterConfidences: normalized.enumerated().map { index, character in
+        NativeOcrCharacterConfidence(
+          char: String(character),
+          confidence: index < split ? (top?.confidence ?? confidence) : (bottom?.confidence ?? confidence),
+          position: index
+        )
+      },
+      layout: layout,
+      category: nativePlateCategory(normalized),
+      patternScore: nativePatternScore(normalized),
+      provider: "CPU_ONNX_PP_OCR",
+      preprocessingVariant: "TWO_LINE_SPLIT"
+    )
   }
 
   private func crop(_ bbox: NativeBbox) -> UIImage {
@@ -789,10 +1768,30 @@ private final class NativeEvidenceFrame {
     }
     return UIImage(cgImage: cgImage, scale: source.scale, orientation: source.imageOrientation)
   }
+
+  private func rotatePlateCrop(_ source: UIImage, degrees: Double) -> UIImage {
+    let size = source.size
+    let renderer = UIGraphicsImageRenderer(size: size)
+    return renderer.image { context in
+      UIColor.black.setFill()
+      context.fill(CGRect(origin: .zero, size: size))
+      let cgContext = context.cgContext
+      cgContext.translateBy(x: size.width / 2.0, y: size.height / 2.0)
+      cgContext.rotate(by: CGFloat(degrees * Double.pi / 180.0))
+      source.draw(
+        in: CGRect(
+          x: -size.width / 2.0,
+          y: -size.height / 2.0,
+          width: size.width,
+          height: size.height
+        )
+      )
+    }
+  }
 }
 
 private struct NativeFrameAnalysis {
-  let detection: NativeDetection?
+  let detections: [NativeDetection]
   let detectorConfidence: Double
   let environmentLabel: String
   let environmentConfidence: Double
@@ -807,50 +1806,53 @@ private enum NativeFrameAnalyzer {
   static func analyze(
     pixelBuffer: CVPixelBuffer,
     frameNumber: Int,
-    threshold: Double
+    threshold: Double,
+    ortRuntime: PlateqOrtRuntime
   ) -> NativeFrameAnalysis {
     let stats = sampleLuma(pixelBuffer)
     let environment = classifyEnvironment(stats)
     let width = CVPixelBufferGetWidth(pixelBuffer)
     let height = CVPixelBufferGetHeight(pixelBuffer)
-    let box = candidateBox(width: width, height: height, frameNumber: frameNumber, stats: stats)
-    let detectorConfidence = roundMetric(
-      clamp01(
-        0.20 +
-          stats.exposureScore * 0.30 +
-          stats.contrastScore * 0.34 +
-          stats.sharpnessScore * 0.10 -
-          stats.glareRatio * 0.45 -
-          stats.darkRatio * 0.18
+    let onnxDetections = ortRuntime.detectPlates(pixelBuffer: pixelBuffer, minConfidence: threshold)
+    let detectorConfidence = onnxDetections.map(\.confidence).max() ?? 0.0
+    let qualityScore = onnxDetections.map { detection in
+      roundMetric(
+        clamp01(
+          detection.confidence * 0.34 +
+            stats.exposureScore * 0.18 +
+            stats.contrastScore * 0.20 +
+            stats.sharpnessScore * 0.14 +
+            boxSizeScore(detection.bbox) * 0.14 -
+            stats.glareRatio * 0.22
+        )
       )
-    )
-    let qualityScore = roundMetric(
-      clamp01(
-        detectorConfidence * 0.30 +
-          stats.exposureScore * 0.20 +
-          stats.contrastScore * 0.22 +
-          stats.sharpnessScore * 0.16 +
-          boxSizeScore(box) * 0.12 -
-          stats.glareRatio * 0.22
+    }.max() ?? 0.0
+    let qualityClass = onnxDetections.isEmpty
+      ? "TOO_SMALL"
+      : classifyQuality(stats: stats, qualityScore: qualityScore)
+    let detections = onnxDetections.map { detection in
+      let perBoxQualityScore = roundMetric(
+        clamp01(
+          detection.confidence * 0.34 +
+            stats.exposureScore * 0.18 +
+            stats.contrastScore * 0.20 +
+            stats.sharpnessScore * 0.14 +
+            boxSizeScore(detection.bbox) * 0.14 -
+            stats.glareRatio * 0.22
+        )
       )
-    )
-    let qualityClass = classifyQuality(stats: stats, qualityScore: qualityScore)
-    let detection: NativeDetection?
-    if detectorConfidence >= max(0.18, threshold * 0.70), qualityScore >= 0.20 {
-      detection = NativeDetection(
-        bbox: box,
-        confidence: qualityScore,
-        detectorConfidence: detectorConfidence,
+      return NativeDetection(
+        bbox: detection.bbox,
+        confidence: perBoxQualityScore,
+        detectorConfidence: detection.confidence,
         motionScore: stats.motionScore,
-        qualityScore: qualityScore,
-        qualityClass: qualityClass
+        qualityScore: perBoxQualityScore,
+        qualityClass: classifyQuality(stats: stats, qualityScore: perBoxQualityScore)
       )
-    } else {
-      detection = nil
     }
 
     return NativeFrameAnalysis(
-      detection: detection,
+      detections: detections,
       detectorConfidence: detectorConfidence,
       environmentLabel: environment.label,
       environmentConfidence: environment.confidence,
@@ -923,26 +1925,6 @@ private enum NativeFrameAnalyzer {
       contrastScore: contrast,
       sharpnessScore: sharpness,
       motionScore: clamp01(abs(contrast - sharpness) * 0.35)
-    )
-  }
-
-  private static func candidateBox(
-    width: Int,
-    height: Int,
-    frameNumber: Int,
-    stats: LumaStats
-  ) -> NativeBbox {
-    let frameAspect = max(0.5, Double(width) / Double(max(1, height)))
-    let boxWidth = clamp(0.24 + stats.contrast * 0.12 + stats.sharpnessScore * 0.06, 0.24, 0.42)
-    let boxHeight = clamp((boxWidth * frameAspect) / 4.6, 0.045, 0.135)
-    let drift = (Double(frameNumber % 40) - 20.0) / 6000.0
-    let centerX = clamp(0.50 + drift, boxWidth / 2.0, 1.0 - boxWidth / 2.0)
-    let centerY = clamp(0.61 + (0.5 - stats.brightness) * 0.08, boxHeight / 2.0, 1.0 - boxHeight / 2.0)
-    return NativeBbox(
-      x: roundMetric(centerX - boxWidth / 2.0),
-      y: roundMetric(centerY - boxHeight / 2.0),
-      width: roundMetric(boxWidth),
-      height: roundMetric(boxHeight)
     )
   }
 
@@ -1020,34 +2002,76 @@ private final class NativeTrackEngine {
   }
 
   func update(
-    detection: NativeDetection?,
+    detections: [NativeDetection],
     evidenceFrame: NativeEvidenceFrame?,
     frameNumber: Int,
     timestampMs: Int,
     maxTracks: Int
   ) {
-    guard let detection else {
+    guard !detections.isEmpty else {
       evidenceFrame?.release()
       ageTracks(frameNumber: frameNumber, timestampMs: timestampMs)
       return
     }
 
-    let matched = tracks
-      .filter { $0.state != "REMOVED" }
-      .max { $0.bbox.iou(detection.bbox) < $1.bbox.iou(detection.bbox) }
+    let maxActiveTracks = max(1, maxTracks)
+    let sortedDetections = Array(
+      detections
+        .sorted { ($0.detectorConfidence * 0.70 + $0.qualityScore * 0.30) > ($1.detectorConfidence * 0.70 + $1.qualityScore * 0.30) }
+        .prefix(maxActiveTracks)
+    )
+    var usedDetectionIndices = Set<Int>()
 
-    if let matched, matched.bbox.iou(detection.bbox) >= 0.20 {
-      matched.applyDetection(detection, evidenceFrame: evidenceFrame, frameNumber: frameNumber, timestampMs: timestampMs)
-    } else if tracks.count < max(1, maxTracks) {
-      tracks.append(NativeTrack(number: nextTrackNumber, detection: detection, evidenceFrame: evidenceFrame, frameNumber: frameNumber, timestampMs: timestampMs))
-      nextTrackNumber += 1
-    } else if let weakest = tracks.min(by: { $0.confidence < $1.confidence }), detection.confidence > weakest.confidence {
-      weakest.replaceWith(number: nextTrackNumber, detection: detection, evidenceFrame: evidenceFrame, frameNumber: frameNumber, timestampMs: timestampMs)
-      nextTrackNumber += 1
-    } else {
-      evidenceFrame?.release()
+    for track in tracks.filter({ $0.state != "REMOVED" }).sorted(by: { $0.confidence > $1.confidence }) {
+      var bestIndex = -1
+      var bestIou = 0.0
+      for (index, detection) in sortedDetections.enumerated() where !usedDetectionIndices.contains(index) {
+        let iou = track.bbox.iou(detection.bbox)
+        if iou >= 0.20, iou > bestIou {
+          bestIndex = index
+          bestIou = iou
+        }
+      }
+      if bestIndex >= 0 {
+        track.applyDetection(
+          sortedDetections[bestIndex],
+          evidenceFrame: evidenceFrame?.copyFrame(),
+          frameNumber: frameNumber,
+          timestampMs: timestampMs
+        )
+        usedDetectionIndices.insert(bestIndex)
+      }
     }
 
+    for (index, detection) in sortedDetections.enumerated() where !usedDetectionIndices.contains(index) {
+      let frameCopy = evidenceFrame?.copyFrame()
+      if tracks.count < maxActiveTracks {
+        tracks.append(
+          NativeTrack(
+            number: nextTrackNumber,
+            detection: detection,
+            evidenceFrame: frameCopy,
+            frameNumber: frameNumber,
+            timestampMs: timestampMs
+          )
+        )
+        nextTrackNumber += 1
+      } else if let weakest = tracks.filter({ $0.state != "REMOVED" }).min(by: { $0.confidence < $1.confidence }),
+                detection.confidence > weakest.confidence {
+        weakest.replaceWith(
+          number: nextTrackNumber,
+          detection: detection,
+          evidenceFrame: frameCopy,
+          frameNumber: frameNumber,
+          timestampMs: timestampMs
+        )
+        nextTrackNumber += 1
+      } else {
+        frameCopy?.release()
+      }
+    }
+
+    evidenceFrame?.release()
     ageTracks(frameNumber: frameNumber, timestampMs: timestampMs)
   }
 
@@ -1222,12 +2246,25 @@ private final class NativeTrack {
     pipelineState = "OCR_CONFIRMED"
   }
 
+  func markOcrAttempt(frameNumber: Int) {
+    lastOcrFrame = frameNumber
+    ocrEmissionCount += 1
+  }
+
   func writeBestEvidenceFiles(cacheDirectory: URL, frameNumber: Int) -> NativeEvidencePaths? {
     bestEvidenceFrame?.writeEvidenceFiles(
       cacheDirectory: cacheDirectory,
       trackNumber: trackNumber,
       bbox: bestEvidenceBbox,
       frameNumber: frameNumber
+    )
+  }
+
+  func recognizeBestPlate(ortRuntime: PlateqOrtRuntime) -> NativeOcrResult? {
+    bestEvidenceFrame?.recognizePlate(
+      ortRuntime: ortRuntime,
+      bbox: bestEvidenceBbox,
+      qualityClass: qualityClass
     )
   }
 

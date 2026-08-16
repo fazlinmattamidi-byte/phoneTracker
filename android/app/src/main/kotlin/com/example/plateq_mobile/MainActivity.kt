@@ -92,7 +92,6 @@ class MainActivity : FlutterActivity() {
     private var lastRuntimeSampleMs = System.currentTimeMillis()
     private val nativeTracker = NativeTrackEngine()
     private val ortRuntime = PlateqOrtRuntime()
-    private val fallbackOcrPlates = listOf("ANN7569", "ABC1234", "KV1234E", "SAB1234", "W8821B")
 
     private val runtimeTick = object : Runnable {
         override fun run() {
@@ -188,6 +187,12 @@ class MainActivity : FlutterActivity() {
                     ensureCameraPermission()
                     result.error("CAMERA_PERMISSION", "Camera permission is required before scanning.", null)
                     emitError("CAMERA_PERMISSION", "Camera permission is required before scanning.", true)
+                    return
+                }
+                if (!ortRuntime.realScannerReady()) {
+                    val message = "Native detector and OCR models must be initialized before scanning."
+                    result.error("MODEL_NOT_READY", message, ortRuntime.warnings())
+                    emitError("MODEL_NOT_READY", message, true)
                     return
                 }
                 selectedCameraId = call.argument<String>("cameraId") ?: selectedCameraId ?: defaultCameraId()
@@ -676,24 +681,13 @@ class MainActivity : FlutterActivity() {
         val candidates = nativeTracker.ocrCandidates(frameCount, effectiveOcrConcurrency())
         for (track in candidates) {
             val nativeOcr = track.recognizeBestPlate(ortRuntime)
-            val fallbackConfidence = roundMetric(
-                clamp(
-                    0.58 + track.qualityScore * 0.26 + track.detectorConfidence * 0.14,
-                    0.0,
-                    0.96,
-                ),
-            )
-            val normalizedPlate = nativeOcr?.normalizedPlate?.takeIf { it.isNotBlank() }
-                ?: fallbackPlateForTrack(track.trackNumber)
-            val confidence = nativeOcr?.confidence ?: fallbackConfidence
-            val characterConfidences = nativeOcr?.characterConfidences
-                ?: normalizedPlate.mapIndexed { index, char ->
-                    NativeOcrCharacterConfidence(
-                        char = char.toString(),
-                        confidence = roundMetric(max(0.50, confidence - index * 0.006)),
-                        position = index,
-                    )
-                }
+            if (nativeOcr == null || nativeOcr.normalizedPlate.isBlank()) {
+                track.markOcrAttempt(frameCount)
+                continue
+            }
+            val normalizedPlate = nativeOcr.normalizedPlate
+            val confidence = nativeOcr.confidence
+            val characterConfidences = nativeOcr.characterConfidences
             track.markOcr(normalizedPlate, confidence, frameCount)
             val evidencePaths = track.writeBestEvidenceFiles(cacheDir, frameCount)
             eventSink?.success(
@@ -702,14 +696,14 @@ class MainActivity : FlutterActivity() {
                     "timestamp" to timestamp(),
                     "platform" to "android",
                     "trackId" to "track-${track.trackNumber}",
-                    "rawText" to (nativeOcr?.rawText ?: normalizedPlate),
+                    "rawText" to nativeOcr.rawText,
                     "normalizedPlate" to normalizedPlate,
                     "displayPlate" to displayPlate(normalizedPlate),
                     "confidence" to confidence,
-                    "layout" to (nativeOcr?.layout ?: "SINGLE_LINE"),
-                    "category" to (nativeOcr?.category ?: "STANDARD"),
-                    "patternScore" to (nativeOcr?.patternScore ?: confidence),
-                    "provider" to (nativeOcr?.provider ?: "NATIVE_FALLBACK_OCR"),
+                    "layout" to nativeOcr.layout,
+                    "category" to nativeOcr.category,
+                    "patternScore" to nativeOcr.patternScore,
+                    "provider" to nativeOcr.provider,
                     "vehicleImagePath" to evidencePaths?.vehicleImagePath,
                     "plateImagePath" to evidencePaths?.plateImagePath,
                     "plateEnhancedImagePath" to evidencePaths?.plateEnhancedImagePath,
@@ -719,10 +713,10 @@ class MainActivity : FlutterActivity() {
                     "plateInnerTextImagePath" to evidencePaths?.plateInnerTextImagePath,
                     "plateCropWidth" to (evidencePaths?.plateCropWidth ?: 0),
                     "plateCropHeight" to (evidencePaths?.plateCropHeight ?: 0),
-                    "preprocessingVariant" to (nativeOcr?.preprocessingVariant ?: evidencePaths?.preprocessingVariant ?: "RAW_CROP"),
+                    "preprocessingVariant" to nativeOcr.preprocessingVariant,
                     "preprocessingVariants" to mergePreprocessingVariants(
                         evidencePaths?.preprocessingVariants,
-                        nativeOcr?.preprocessingVariant,
+                        nativeOcr.preprocessingVariant,
                     ),
                     "characterConfidences" to characterConfidences.map { it.toMap() },
                 )
@@ -742,21 +736,16 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun detectorProviderLabel(): String =
-        ortRuntime.providerLabel("detector", "NATIVE_HEURISTIC")
+        ortRuntime.providerLabel("detector", "UNAVAILABLE")
 
     private fun ocrProviderLabel(): String =
-        ortRuntime.providerLabel("ocr", "NATIVE_FALLBACK_OCR")
+        ortRuntime.providerLabel("ocr", "UNAVAILABLE")
 
     private fun environmentProviderLabel(): String =
         ortRuntime.providerLabel("environment", "NATIVE_HEURISTIC")
 
     private fun plateQualityProviderLabel(): String =
         ortRuntime.providerLabel("plateQuality", "NATIVE_HEURISTIC")
-
-    private fun fallbackPlateForTrack(trackNumber: Int): String {
-        val index = ((trackNumber - 1) % fallbackOcrPlates.size).coerceAtLeast(0)
-        return fallbackOcrPlates[index]
-    }
 
     private fun shouldRunAnalyzer(nextFrameNumber: Long): Boolean {
         return nextFrameNumber % effectiveAnalysisStride().toLong() == 0L
@@ -1021,16 +1010,22 @@ private class PlateqOrtRuntime {
     }
 
     @Synchronized
+    fun realScannerReady(): Boolean =
+        sessions.containsKey("detector") &&
+            sessions.containsKey("ocr") &&
+            ocrDictionary.isNotEmpty()
+
+    @Synchronized
     fun providerLabel(id: String, fallback: String): String {
         if (!sessions.containsKey(id)) return fallback
         return when (id) {
-            "detector" -> if (lastDetectorInferenceError == null) "CPU_ONNX/FALLBACK" else "CPU_ONNX_READY/FALLBACK"
+            "detector" -> if (lastDetectorInferenceError == null) "CPU_ONNX" else "CPU_ONNX_ERROR"
             "ocr" -> if (ocrDictionary.isNotEmpty() && lastOcrInferenceError == null) {
-                "CPU_ONNX_PP_OCR/FALLBACK"
+                "CPU_ONNX_PP_OCR"
             } else {
-                "CPU_ONNX_READY/FALLBACK"
+                "CPU_ONNX_PP_OCR_ERROR"
             }
-            else -> "CPU_ONNX_READY/FALLBACK"
+            else -> "CPU_ONNX_READY"
         }
     }
 
@@ -2024,62 +2019,43 @@ private object NativeFrameAnalyzer {
         val stats = sampleLuma(image)
         val environment = classifyEnvironment(stats)
         val onnxDetections = ortRuntime.detectPlates(image, threshold)
-        val fallbackBox = candidateBox(image.width, image.height, frameNumber, stats)
-        val detectorConfidence = onnxDetections.maxOfOrNull { it.confidence } ?: roundMetric(
-            clamp01(
-                0.20 +
-                    stats.exposureScore * 0.30 +
-                    stats.contrastScore * 0.34 +
-                    stats.sharpnessScore * 0.10 -
-                    stats.glareRatio * 0.45 -
-                    stats.darkRatio * 0.18,
-            ),
-        )
-        val qualityScore = roundMetric(
-            clamp01(
-                detectorConfidence * 0.30 +
-                    stats.exposureScore * 0.20 +
-                    stats.contrastScore * 0.22 +
-                    stats.sharpnessScore * 0.16 +
-                    boxSizeScore(onnxDetections.firstOrNull()?.bbox ?: fallbackBox) * 0.12 -
-                    stats.glareRatio * 0.22,
-            ),
-        )
-        val qualityClass = classifyQuality(stats, qualityScore)
-        val detections = if (onnxDetections.isNotEmpty()) {
-            onnxDetections.map { detection ->
-                val perBoxQualityScore = roundMetric(
-                    clamp01(
-                        detection.confidence * 0.34 +
-                            stats.exposureScore * 0.18 +
-                            stats.contrastScore * 0.20 +
-                            stats.sharpnessScore * 0.14 +
-                            boxSizeScore(detection.bbox) * 0.14 -
-                            stats.glareRatio * 0.22,
-                    ),
-                )
-                NativeDetection(
-                    bbox = detection.bbox,
-                    confidence = perBoxQualityScore,
-                    detectorConfidence = detection.confidence,
-                    motionScore = stats.motionScore,
-                    qualityScore = perBoxQualityScore,
-                    qualityClass = classifyQuality(stats, perBoxQualityScore),
-                )
-            }
-        } else if (detectorConfidence >= max(0.18, threshold * 0.70) && qualityScore >= 0.20) {
-            listOf(
-                NativeDetection(
-                    bbox = fallbackBox,
-                    confidence = qualityScore,
-                    detectorConfidence = detectorConfidence,
-                    motionScore = stats.motionScore,
-                    qualityScore = qualityScore,
-                    qualityClass = qualityClass,
-                )
+        val detectorConfidence = onnxDetections.maxOfOrNull { it.confidence } ?: 0.0
+        val qualityScore = onnxDetections.maxOfOrNull { detection ->
+            roundMetric(
+                clamp01(
+                    detection.confidence * 0.34 +
+                        stats.exposureScore * 0.18 +
+                        stats.contrastScore * 0.20 +
+                        stats.sharpnessScore * 0.14 +
+                        boxSizeScore(detection.bbox) * 0.14 -
+                        stats.glareRatio * 0.22,
+                ),
             )
+        } ?: 0.0
+        val qualityClass = if (onnxDetections.isEmpty()) {
+            "TOO_SMALL"
         } else {
-            emptyList()
+            classifyQuality(stats, qualityScore)
+        }
+        val detections = onnxDetections.map { detection ->
+            val perBoxQualityScore = roundMetric(
+                clamp01(
+                    detection.confidence * 0.34 +
+                        stats.exposureScore * 0.18 +
+                        stats.contrastScore * 0.20 +
+                        stats.sharpnessScore * 0.14 +
+                        boxSizeScore(detection.bbox) * 0.14 -
+                        stats.glareRatio * 0.22,
+                ),
+            )
+            NativeDetection(
+                bbox = detection.bbox,
+                confidence = perBoxQualityScore,
+                detectorConfidence = detection.confidence,
+                motionScore = stats.motionScore,
+                qualityScore = perBoxQualityScore,
+                qualityClass = classifyQuality(stats, perBoxQualityScore),
+            )
         }
         return NativeFrameAnalysis(
             detections = detections,
@@ -2153,21 +2129,6 @@ private object NativeFrameAnalyzer {
             contrastScore = contrast,
             sharpnessScore = sharpness,
             motionScore = clamp01(abs(contrast - sharpness) * 0.35),
-        )
-    }
-
-    private fun candidateBox(width: Int, height: Int, frameNumber: Long, stats: LumaStats): NativeBbox {
-        val frameAspect = max(0.5, width.toDouble() / max(1, height).toDouble())
-        val boxWidth = clamp(0.24 + stats.contrast * 0.12 + stats.sharpnessScore * 0.06, 0.24, 0.42)
-        val boxHeight = clamp((boxWidth * frameAspect) / 4.6, 0.045, 0.135)
-        val drift = ((frameNumber % 40L).toDouble() - 20.0) / 6000.0
-        val centerX = clamp(0.50 + drift, boxWidth / 2.0, 1.0 - boxWidth / 2.0)
-        val centerY = clamp(0.61 + (0.5 - stats.brightness) * 0.08, boxHeight / 2.0, 1.0 - boxHeight / 2.0)
-        return NativeBbox(
-            x = roundMetric(centerX - boxWidth / 2.0),
-            y = roundMetric(centerY - boxHeight / 2.0),
-            width = roundMetric(boxWidth),
-            height = roundMetric(boxHeight),
         )
     }
 
@@ -2453,6 +2414,11 @@ private class NativeTrack(
         lastOcrFrame = frameNumber
         ocrEmissionCount += 1
         pipelineState = "OCR_CONFIRMED"
+    }
+
+    fun markOcrAttempt(frameNumber: Long) {
+        lastOcrFrame = frameNumber
+        ocrEmissionCount += 1
     }
 
     fun writeBestEvidenceFiles(cacheDir: File, frameNumber: Long): NativeEvidencePaths? {
