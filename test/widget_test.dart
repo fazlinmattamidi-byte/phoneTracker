@@ -6,6 +6,7 @@ import 'package:plateq_mobile/src/mobile_app.dart';
 
 void main() {
   const authChannel = MethodChannel('plateq.auth/session');
+  const storageChannel = MethodChannel('plateq.app/storage');
 
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -17,11 +18,22 @@ void main() {
         _ => null,
       };
     });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(storageChannel, (MethodCall call) async {
+      return switch (call.method) {
+        'readJson' => null,
+        'writeJson' => true,
+        'clearJson' => true,
+        _ => null,
+      };
+    });
   });
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(authChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(storageChannel, null);
   });
 
   testWidgets('PlateQ mobile app signs in to the dashboard shell',
@@ -37,11 +49,12 @@ void main() {
     await tester.tap(find.text('Sign In Now'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('TOTAL VEHICLES'), findsOneWidget);
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
   });
 
-  testWidgets('PlateQ mobile app uses navigation rail on wide layouts',
+  testWidgets('PlateQ mobile app uses web sidebar on wide layouts',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1;
@@ -55,7 +68,9 @@ void main() {
     await tester.tap(find.text('Sign In Now'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.text('MENU'), findsOneWidget);
+    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
     expect(find.byType(NavigationBar), findsNothing);
   });
 }

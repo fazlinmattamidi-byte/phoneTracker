@@ -4,11 +4,37 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'anpr/consensus.dart';
+import 'anpr/matching_engine.dart';
 import 'anpr/native_anpr_bridge.dart';
+import 'anpr/normaliser.dart';
+import 'anpr/plate_types.dart';
+import 'anpr/special_series.dart';
 import 'core/app_state.dart';
 import 'core/domain.dart';
 import 'core/localization.dart';
 import 'core/native_share.dart';
+
+class TrackColors {
+  static const bg = Color(0xFF090C15);
+  static const bgDeep = Color(0xFF020617);
+  static const panel = Color(0xE60F172A);
+  static const panelSolid = Color(0xFF0F172A);
+  static const panelSoft = Color(0x991E293B);
+  static const field = Color(0xFF020617);
+  static const border = Color(0xFF1E293B);
+  static const cyanBorder = Color(0x80155E75);
+  static const cyan = Color(0xFF22D3EE);
+  static const cyanStrong = Color(0xFF06B6D4);
+  static const text = Color(0xFFF8FAFC);
+  static const muted = Color(0xFF94A3B8);
+  static const muted2 = Color(0xFF64748B);
+  static const blue = Color(0xFF60A5FA);
+  static const purple = Color(0xFFC084FC);
+  static const emerald = Color(0xFF34D399);
+  static const amber = Color(0xFFFBBF24);
+  static const red = Color(0xFFF87171);
+}
 
 class PlateQMobileApp extends StatefulWidget {
   const PlateQMobileApp({super.key});
@@ -58,36 +84,170 @@ class _PlateQMobileAppState extends State<PlateQMobileApp> {
 }
 
 ThemeData _buildTheme(Brightness brightness) {
-  const cyan = Color(0xFF06B6D4);
   final isDark = brightness == Brightness.dark;
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
     scaffoldBackgroundColor:
-        isDark ? const Color(0xFF020617) : const Color(0xFFEFF6FF),
+        isDark ? TrackColors.bg : const Color(0xFFF8FAFC),
+    fontFamily: 'Roboto',
     colorScheme: ColorScheme.fromSeed(
-      seedColor: cyan,
+      seedColor: TrackColors.cyanStrong,
       brightness: brightness,
-      surface: isDark ? const Color(0xFF0F172A) : Colors.white,
-      primary: cyan,
+      surface: isDark ? TrackColors.panelSolid : Colors.white,
+      primary: TrackColors.cyanStrong,
     ),
     appBarTheme: const AppBarTheme(
-      backgroundColor: Color(0xFF020617),
-      foregroundColor: Colors.white,
+      backgroundColor: TrackColors.panel,
+      foregroundColor: TrackColors.text,
       elevation: 0,
       centerTitle: false,
     ),
+    cardTheme: CardThemeData(
+      color: isDark ? TrackColors.panel : Colors.white,
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isDark ? TrackColors.border : const Color(0xFFE2E8F0),
+        ),
+      ),
+    ),
+    chipTheme: ChipThemeData(
+      backgroundColor: isDark ? TrackColors.field : const Color(0xFFF1F5F9),
+      selectedColor: isDark ? const Color(0xE6082F49) : const Color(0xFFE0F2FE),
+      disabledColor: isDark ? TrackColors.panelSoft : const Color(0xFFE2E8F0),
+      side: BorderSide(
+        color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
+      ),
+      labelStyle: TextStyle(
+        color: isDark ? TrackColors.muted : const Color(0xFF334155),
+        fontSize: 11,
+        fontWeight: FontWeight.w800,
+      ),
+      secondaryLabelStyle: TextStyle(
+        color: isDark ? TrackColors.cyan : const Color(0xFF0369A1),
+        fontSize: 11,
+        fontWeight: FontWeight.w900,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: TrackColors.cyanStrong,
+        foregroundColor: TrackColors.bgDeep,
+        minimumSize: const Size.fromHeight(44),
+        textStyle: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
+        side: BorderSide(
+          color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
+        ),
+        minimumSize: const Size.fromHeight(44),
+        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: TrackColors.cyan,
+        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    ),
+    iconButtonTheme: IconButtonThemeData(
+      style: IconButton.styleFrom(
+        foregroundColor: TrackColors.muted,
+        backgroundColor: isDark ? const Color(0xCC1E293B) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: isDark ? const Color(0x991E293B) : const Color(0xFFE2E8F0),
+          ),
+        ),
+      ),
+    ),
+    listTileTheme: ListTileThemeData(
+      iconColor: isDark ? TrackColors.cyan : const Color(0xFF0284C7),
+      textColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
+      titleTextStyle: TextStyle(
+        color: isDark ? TrackColors.text : const Color(0xFF0F172A),
+        fontSize: 14,
+        fontWeight: FontWeight.w800,
+      ),
+      subtitleTextStyle: TextStyle(
+        color: isDark ? TrackColors.muted : const Color(0xFF475569),
+        fontSize: 12,
+        height: 1.35,
+      ),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: isDark ? TrackColors.panelSolid : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isDark ? TrackColors.border : const Color(0xFFE2E8F0),
+        ),
+      ),
+      textStyle: TextStyle(
+        color: isDark ? TrackColors.text : const Color(0xFF0F172A),
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+    dropdownMenuTheme: DropdownMenuThemeData(
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: isDark ? TrackColors.field : const Color(0xFFF8FAFC),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
+          ),
+        ),
+      ),
+    ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: const Color(0xFF020617),
+      fillColor: isDark ? TrackColors.field : const Color(0xFFF8FAFC),
+      labelStyle: TextStyle(
+        color: isDark ? TrackColors.muted : const Color(0xFF475569),
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+      ),
+      prefixIconColor: isDark ? TrackColors.muted2 : const Color(0xFF64748B),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFF1E293B)),
+        borderSide: BorderSide(
+          color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
+        ),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: cyan),
+        borderSide: const BorderSide(color: TrackColors.cyanStrong),
+      ),
+    ),
+    textTheme: (isDark ? ThemeData.dark() : ThemeData.light()).textTheme.apply(
+          bodyColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
+          displayColor: isDark ? TrackColors.text : const Color(0xFF0F172A),
+        ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: isDark ? TrackColors.panelSolid : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isDark ? TrackColors.border : const Color(0xFFCBD5E1),
+        ),
       ),
     ),
   );
@@ -187,42 +347,51 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   Center(
                     child: Container(
-                      width: 72,
-                      height: 72,
+                      width: 64,
+                      height: 64,
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
+                        color: TrackColors.bgDeep,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFF22D3EE)),
+                        border: Border.all(color: const Color(0x6622D3EE)),
+                        boxShadow: const [
+                          BoxShadow(color: Color(0x3322D3EE), blurRadius: 22),
+                        ],
                       ),
                       child: Image.asset('public/logo.png', fit: BoxFit.cover),
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   const Text(
                     'TRACK',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0),
+                      color: TrackColors.text,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     state.t('appSubName'),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        color: Color(0xFF94A3B8), fontWeight: FontWeight.w600),
+                      color: TrackColors.muted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 32),
                   SectionCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          state.t('demoRole'),
+                          '${state.t('demoRole')} (Select for Demo)',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
-                            color: Color(0xFF22D3EE),
+                            color: TrackColors.cyan,
                             fontWeight: FontWeight.w900,
                             fontSize: 12,
                           ),
@@ -235,11 +404,11 @@ class _LoginScreenState extends State<LoginScreen> {
                                 child: Padding(
                                   padding:
                                       const EdgeInsets.symmetric(horizontal: 4),
-                                  child: ChoiceChip(
+                                  child: _LoginRoleTile(
+                                    role: role,
                                     selected: _selectedRole == role,
-                                    label: Text(_roleLabel(state, role),
-                                        overflow: TextOverflow.ellipsis),
-                                    onSelected: (_) => _selectRole(role),
+                                    label: _roleLabel(state, role),
+                                    onTap: () => _selectRole(role),
                                   ),
                                 ),
                               ),
@@ -255,12 +424,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       children: [
                         Text(state.t('loginTitle'),
                             style: const TextStyle(
-                                fontWeight: FontWeight.w800, fontSize: 18)),
+                              color: TrackColors.text,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                            )),
                         const SizedBox(height: 4),
                         Text(
                           state.t('loginSubtitle'),
                           style: const TextStyle(
-                              color: Color(0xFF94A3B8), fontSize: 12),
+                              color: TrackColors.muted, fontSize: 12),
                         ),
                         const SizedBox(height: 18),
                         TextField(
@@ -311,9 +483,80 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-class PlateQShell extends StatelessWidget {
+class _LoginRoleTile extends StatelessWidget {
+  const _LoginRoleTile({
+    required this.role,
+    required this.selected,
+    required this.label,
+    required this.onTap,
+  });
+
+  final Role role;
+  final bool selected;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (role) {
+      Role.user => Icons.person_outline,
+      Role.admin => Icons.verified_user_outlined,
+      Role.superAdmin => Icons.shield_outlined,
+    };
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        height: 76,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xE6082F49) : const Color(0x99020617),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? TrackColors.cyan : TrackColors.border,
+          ),
+          boxShadow: selected
+              ? const [
+                  BoxShadow(color: Color(0x66082F49), blurRadius: 16),
+                ]
+              : null,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              color: selected ? TrackColors.cyan : TrackColors.muted2,
+              size: 20,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: selected ? TrackColors.cyan : TrackColors.muted,
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                height: 1.1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class PlateQShell extends StatefulWidget {
   const PlateQShell({super.key});
 
+  @override
+  State<PlateQShell> createState() => _PlateQShellState();
+}
+
+class _PlateQShellState extends State<PlateQShell> {
   void _selectNavigationIndex(AppState state, int index) {
     switch (index) {
       case 0:
@@ -329,148 +572,717 @@ class PlateQShell extends StatelessWidget {
         state.go(AppSection.history);
         break;
       case 4:
-        state.go(AppSection.more);
+        _showMoreDrawer(context);
         break;
     }
+  }
+
+  void _showMoreDrawer(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _MoreDrawerSheet(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     final size = MediaQuery.sizeOf(context);
-    final compactHeader = size.width < 430;
     final wideLayout = size.width >= 900;
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 12,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
-              child: Image.asset('public/logo.png', fit: BoxFit.cover),
-            ),
-            if (!compactHeader) ...[
-              const SizedBox(width: 10),
-              const Text('TRACK',
-                  style:
-                      TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0)),
-            ],
-          ],
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          color: state.themeChoice == AppThemeChoice.dark
+              ? TrackColors.bg
+              : const Color(0xFFF8FAFC),
         ),
-        actions: [
-          if (compactHeader)
-            IconButton(
-              tooltip: '${state.t('languageSetting')}: ${state.language.code}',
-              onPressed: state.toggleLanguage,
-              icon: const Icon(Icons.language),
-            )
-          else
-            TextButton.icon(
-              onPressed: state.toggleLanguage,
-              icon: const Icon(Icons.language, size: 18),
-              label: Text(state.language.code),
-            ),
-          IconButton(
-            tooltip: state.t('themeSetting'),
-            onPressed: state.toggleTheme,
-            icon: Icon(state.themeChoice == AppThemeChoice.dark
-                ? Icons.light_mode_outlined
-                : Icons.dark_mode_outlined),
+        child: SafeArea(
+          bottom: false,
+          child: Column(
+            children: [
+              const _TrackTopHeader(),
+              Expanded(
+                child: wideLayout
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const _TrackSidebar(),
+                          Expanded(
+                            child: _TrackMainPane(
+                              bottomPadding: 24,
+                              child: _SectionBody(section: state.section),
+                            ),
+                          ),
+                        ],
+                      )
+                    : _TrackMainPane(
+                        bottomPadding: 108,
+                        child: _SectionBody(section: state.section),
+                      ),
+              ),
+            ],
           ),
-          if (!compactHeader) _RolePill(role: state.role),
-          IconButton(
-            tooltip: state.t('navProfile'),
-            onPressed: () => state.go(AppSection.profile),
-            icon: const Icon(Icons.person_outline),
-          ),
-          IconButton(
-            tooltip: state.t('navLogout'),
-            onPressed: state.logout,
-            icon: const Icon(Icons.logout),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-          child: wideLayout
-              ? Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    NavigationRail(
-                      selectedIndex: state.bottomIndex,
-                      onDestinationSelected: (index) =>
-                          _selectNavigationIndex(state, index),
-                      labelType: NavigationRailLabelType.all,
-                      minWidth: 82,
-                      destinations: [
-                        NavigationRailDestination(
-                          icon: const Icon(Icons.dashboard_outlined),
-                          selectedIcon: const Icon(Icons.dashboard),
-                          label: Text(state.t('navDashboard')),
-                        ),
-                        NavigationRailDestination(
-                          icon: const Icon(Icons.search),
-                          label: Text(state.t('navSearch')),
-                        ),
-                        NavigationRailDestination(
-                          icon: const Icon(Icons.camera_alt_outlined),
-                          selectedIcon: const Icon(Icons.camera_alt),
-                          label: Text(state.t('navScanner')),
-                        ),
-                        NavigationRailDestination(
-                          icon: const Icon(Icons.history),
-                          label: Text(state.t('navHistory')),
-                        ),
-                        NavigationRailDestination(
-                          icon: const Icon(Icons.more_horiz),
-                          label: Text(state.t('moreMenu')),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 14),
-                    const VerticalDivider(width: 1),
-                    const SizedBox(width: 14),
-                    Expanded(child: _SectionBody(section: state.section)),
-                  ],
-                )
-              : _SectionBody(section: state.section),
         ),
       ),
       bottomNavigationBar: wideLayout
           ? null
-          : NavigationBar(
-              selectedIndex: state.bottomIndex,
-              onDestinationSelected: (index) =>
-                  _selectNavigationIndex(state, index),
-              destinations: [
-                NavigationDestination(
-                  icon: const Icon(Icons.dashboard_outlined),
-                  selectedIcon: const Icon(Icons.dashboard),
-                  label: state.t('navDashboard'),
-                ),
-                NavigationDestination(
-                    icon: const Icon(Icons.search),
-                    label: state.t('navSearch')),
-                NavigationDestination(
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  selectedIcon: const Icon(Icons.camera_alt),
-                  label: state.t('navScanner'),
-                ),
-                NavigationDestination(
-                    icon: const Icon(Icons.history),
-                    label: state.t('navHistory')),
-                NavigationDestination(
-                    icon: const Icon(Icons.more_horiz),
-                    label: state.t('moreMenu')),
-              ],
-            ),
+          : _TrackBottomNav(onDestinationSelected: (index) {
+              _selectNavigationIndex(state, index);
+            }),
     );
   }
+}
+
+class _TrackTopHeader extends StatelessWidget {
+  const _TrackTopHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final compact = MediaQuery.sizeOf(context).width < 430;
+    return Container(
+      height: 58,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 20),
+      decoration: const BoxDecoration(
+        color: Color(0xE60F172A),
+        border: Border(bottom: BorderSide(color: Color(0x66155E75))),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x66020617),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () => state.go(AppSection.dashboard),
+              child: Row(
+                children: [
+                  Container(
+                    width: compact ? 36 : 40,
+                    height: compact ? 36 : 40,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: TrackColors.bgDeep,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0x6622D3EE)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x3322D3EE),
+                          blurRadius: 18,
+                        ),
+                      ],
+                    ),
+                    child: Image.asset('public/logo.png', fit: BoxFit.cover),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'TRACK',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: TrackColors.text,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0,
+                            height: 1,
+                          ),
+                        ),
+                        if (!compact)
+                          Text(
+                            state.t('appSubName'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: TrackColors.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              height: 1.25,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _HeaderControl(
+            tooltip: '${state.t('languageSetting')}: ${state.language.code}',
+            onPressed: state.toggleLanguage,
+            child: compact
+                ? const Icon(Icons.language,
+                    size: 16, color: TrackColors.cyan)
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.language,
+                          size: 16, color: TrackColors.cyan),
+                      const SizedBox(width: 5),
+                      Text(
+                        state.language.code,
+                        style: const TextStyle(
+                          color: TrackColors.text,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(width: 8),
+          _HeaderControl(
+            tooltip: state.t('themeSetting'),
+            onPressed: state.toggleTheme,
+            child: Icon(
+              state.themeChoice == AppThemeChoice.dark
+                  ? Icons.light_mode_outlined
+                  : Icons.dark_mode_outlined,
+              size: 16,
+              color: state.themeChoice == AppThemeChoice.dark
+                  ? TrackColors.amber
+                  : TrackColors.cyan,
+            ),
+          ),
+          const SizedBox(width: 8),
+          _HeaderControl(
+            tooltip: state.t('navProfile'),
+            onPressed: () => state.go(AppSection.profile),
+            child: const Icon(
+              Icons.person_outline,
+              size: 16,
+              color: TrackColors.cyan,
+            ),
+          ),
+          if (!compact) ...[
+            const SizedBox(width: 8),
+            _HeaderControl(
+              tooltip: state.t('navLogout'),
+              onPressed: state.logout,
+              child: const Icon(
+                Icons.logout,
+                size: 16,
+                color: TrackColors.red,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HeaderControl extends StatelessWidget {
+  const _HeaderControl({
+    required this.tooltip,
+    required this.onPressed,
+    required this.child,
+  });
+
+  final String tooltip;
+  final VoidCallback onPressed;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onPressed,
+        child: Container(
+          height: 36,
+          constraints: const BoxConstraints(minWidth: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xCC1E293B),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0x991E293B)),
+          ),
+          child: Center(child: child),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackMainPane extends StatelessWidget {
+  const _TrackMainPane({
+    required this.child,
+    required this.bottomPadding,
+  });
+
+  final Widget child;
+  final double bottomPadding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1480),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, bottomPadding),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackBottomNav extends StatelessWidget {
+  const _TrackBottomNav({required this.onDestinationSelected});
+
+  final ValueChanged<int> onDestinationSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final isMalay = state.language == AppLanguage.bm;
+    final items = [
+      _NavItemData(
+        label: state.t('navDashboard'),
+        shortLabel: isMalay ? 'Papan' : 'Home',
+        icon: Icons.dashboard_outlined,
+        section: AppSection.dashboard,
+      ),
+      _NavItemData(
+        label: state.t('navSearch'),
+        shortLabel: isMalay ? 'Cari' : 'Search',
+        icon: Icons.search,
+        section: AppSection.search,
+      ),
+      _NavItemData(
+        label: state.t('navScanner'),
+        shortLabel: isMalay ? 'Imbas' : 'Scan',
+        icon: Icons.camera_alt_outlined,
+        section: AppSection.scanner,
+        scannerButton: true,
+      ),
+      _NavItemData(
+        label: state.t('navHistory'),
+        shortLabel: isMalay ? 'Audit' : 'Audit',
+        icon: Icons.history,
+        section: AppSection.history,
+      ),
+      _NavItemData(
+        label: state.t('moreMenu'),
+        shortLabel: state.t('moreMenu'),
+        icon: Icons.more_horiz,
+        section: AppSection.more,
+      ),
+    ];
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: Container(
+          height: 72,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xF2020617),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0x80155E75)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0xCC020617),
+                blurRadius: 30,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              for (var index = 0; index < items.length; index += 1)
+                Expanded(
+                  child: _TrackBottomNavItem(
+                    item: items[index],
+                    active: items[index].section == state.section,
+                    onTap: () => onDestinationSelected(index),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackBottomNavItem extends StatelessWidget {
+  const _TrackBottomNavItem({
+    required this.item,
+    required this.active,
+    required this.onTap,
+  });
+
+  final _NavItemData item;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.scannerButton) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: TrackColors.cyanStrong,
+                border: Border.all(color: const Color(0x6622D3EE)),
+                boxShadow: const [
+                  BoxShadow(color: Color(0x5522D3EE), blurRadius: 14),
+                ],
+              ),
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: TrackColors.bgDeep,
+                ),
+                child: Icon(
+                  Icons.camera_alt_outlined,
+                  color: TrackColors.cyan,
+                  size: 18,
+                ),
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              item.shortLabel,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: TrackColors.cyan,
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        height: 56,
+        decoration: BoxDecoration(
+          color: active ? const Color(0xCC0F172A) : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              item.icon,
+              size: 18,
+              color: active ? TrackColors.cyan : TrackColors.muted2,
+            ),
+            const SizedBox(height: 5),
+            Text(
+              item.shortLabel,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: active ? TrackColors.cyan : TrackColors.muted,
+                fontSize: 10,
+                fontWeight: active ? FontWeight.w900 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackSidebar extends StatelessWidget {
+  const _TrackSidebar();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final items = _moreNavItems(state, includeMain: true);
+    return Container(
+      width: 256,
+      padding: const EdgeInsets.all(12),
+      decoration: const BoxDecoration(
+        color: Color(0xCC020617),
+        border: Border(right: BorderSide(color: TrackColors.border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+            child: Text(
+              state.t('navMenuHeader').toUpperCase(),
+              style: const TextStyle(
+                color: TrackColors.muted,
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          for (final item in items)
+            _SidebarButton(
+              item: item,
+              active: item.section == state.section,
+              onTap: () => state.go(item.section),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarButton extends StatelessWidget {
+  const _SidebarButton({
+    required this.item,
+    required this.active,
+    required this.onTap,
+  });
+
+  final _NavItemData item;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xCC082F49) : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: active ? const Color(0x66155E75) : Colors.transparent,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                item.icon,
+                color: active ? TrackColors.cyan : TrackColors.muted,
+                size: 18,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  item.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: active ? TrackColors.cyan : TrackColors.muted,
+                    fontSize: 14,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreDrawerSheet extends StatelessWidget {
+  const _MoreDrawerSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final items = _moreNavItems(state);
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+        decoration: const BoxDecoration(
+          color: TrackColors.panelSolid,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border(top: BorderSide(color: Color(0x80155E75))),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    state.t('moreMenu').toUpperCase(),
+                    style: const TextStyle(
+                      color: TrackColors.text,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 2.6,
+              children: [
+                for (final item in items)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      state.go(item.section);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: item.section == state.section
+                            ? const Color(0xCC082F49)
+                            : const Color(0x991E293B),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: item.section == state.section
+                              ? const Color(0x6622D3EE)
+                              : const Color(0x991E293B),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(item.icon, color: TrackColors.cyan, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              item.label,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: TrackColors.text,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                state.logout();
+              },
+              icon: const Icon(Icons.logout, color: TrackColors.red),
+              label: Text(state.t('navLogout')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItemData {
+  const _NavItemData({
+    required this.label,
+    required this.shortLabel,
+    required this.icon,
+    required this.section,
+    this.scannerButton = false,
+  });
+
+  final String label;
+  final String shortLabel;
+  final IconData icon;
+  final AppSection section;
+  final bool scannerButton;
+}
+
+List<_NavItemData> _moreNavItems(AppState state, {bool includeMain = false}) {
+  final items = <_NavItemData>[
+    if (includeMain) ...[
+      _NavItemData(
+        label: state.t('navDashboard'),
+        shortLabel: state.t('navDashboard'),
+        icon: Icons.dashboard_outlined,
+        section: AppSection.dashboard,
+      ),
+      _NavItemData(
+        label: state.t('navScanner'),
+        shortLabel: state.t('navScanner'),
+        icon: Icons.camera_alt_outlined,
+        section: AppSection.scanner,
+      ),
+      _NavItemData(
+        label: state.t('navSearch'),
+        shortLabel: state.t('navSearch'),
+        icon: Icons.search,
+        section: AppSection.search,
+      ),
+      _NavItemData(
+        label: state.t('navHistory'),
+        shortLabel: state.t('navHistory'),
+        icon: Icons.history,
+        section: AppSection.history,
+      ),
+    ],
+    _NavItemData(
+      label: state.t('navVehicles'),
+      shortLabel: state.t('navVehicles'),
+      icon: Icons.directions_car,
+      section: AppSection.vehicles,
+    ),
+    if (state.canManageUsers)
+      _NavItemData(
+        label: state.t('navUsers'),
+        shortLabel: state.t('navUsers'),
+        icon: Icons.people_alt_outlined,
+        section: AppSection.users,
+      ),
+    _NavItemData(
+      label: state.t('navSettings'),
+      shortLabel: state.t('navSettings'),
+      icon: Icons.settings_outlined,
+      section: AppSection.settings,
+    ),
+    _NavItemData(
+      label: state.t('navProfile'),
+      shortLabel: state.t('navProfile'),
+      icon: Icons.person_outline,
+      section: AppSection.profile,
+    ),
+  ];
+  return items;
 }
 
 class _SectionBody extends StatelessWidget {
@@ -516,6 +1328,7 @@ class DashboardScreen extends StatelessWidget {
         state.history.where((log) => log.type == 'DETECTION').length;
     final searches = state.history.where((log) => log.type == 'SEARCH').length;
     final recent = state.history.take(5).toList();
+    final showQuickNav = MediaQuery.sizeOf(context).width >= 600;
 
     return ListView(
       children: [
@@ -546,43 +1359,50 @@ class DashboardScreen extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        SectionCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SectionTitle(
-                  icon: Icons.camera_alt_outlined, title: state.t('quickNav')),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ActionChip(
-                    avatar: const Icon(Icons.camera_alt_outlined, size: 18),
-                    label: Text(state.t('openScannerBtn')),
-                    onPressed: () => state.go(AppSection.scanner),
-                  ),
-                  ActionChip(
-                    avatar: const Icon(Icons.search, size: 18),
-                    label: Text(state.t('searchPlateBtn')),
-                    onPressed: () => state.go(AppSection.search),
-                  ),
-                  ActionChip(
-                    avatar: const Icon(Icons.directions_car, size: 18),
-                    label: Text(state.t('vehiclesRepoBtn')),
-                    onPressed: () => state.go(AppSection.vehicles),
-                  ),
-                  ActionChip(
-                    avatar: const Icon(Icons.history, size: 18),
-                    label: Text(state.t('auditHistoryBtn')),
-                    onPressed: () => state.go(AppSection.history),
-                  ),
-                ],
-              ),
-            ],
+        if (showQuickNav) ...[
+          SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SectionTitle(
+                    icon: Icons.camera_alt_outlined,
+                    title: state.t('quickNav')),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    _DashboardActionButton(
+                      icon: Icons.camera_alt_outlined,
+                      label: state.t('openScannerBtn'),
+                      tone: TrackColors.cyan,
+                      onTap: () => state.go(AppSection.scanner),
+                    ),
+                    _DashboardActionButton(
+                      icon: Icons.search,
+                      label: state.t('searchPlateBtn'),
+                      tone: TrackColors.cyan,
+                      onTap: () => state.go(AppSection.search),
+                    ),
+                    _DashboardActionButton(
+                      icon: Icons.directions_car,
+                      label: state.t('vehiclesRepoBtn'),
+                      tone: TrackColors.purple,
+                      onTap: () => state.go(AppSection.vehicles),
+                    ),
+                    _DashboardActionButton(
+                      icon: Icons.history,
+                      label: state.t('auditHistoryBtn'),
+                      tone: TrackColors.emerald,
+                      onTap: () => state.go(AppSection.history),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
+          const SizedBox(height: 12),
+        ],
         SectionCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -595,6 +1415,62 @@ class DashboardScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _DashboardActionButton extends StatelessWidget {
+  const _DashboardActionButton({
+    required this.icon,
+    required this.label,
+    required this.tone,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color tone;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 44, minWidth: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: tone == TrackColors.cyan
+              ? const Color(0xCC082F49)
+              : TrackColors.field,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: tone == TrackColors.cyan
+                ? const Color(0x99155E75)
+                : TrackColors.border,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: tone, size: 18),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: TrackColors.text,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -715,7 +1591,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   StreamSubscription<AnprEvent>? _subscription;
   List<NativeCameraDevice> _nativeCameras = const [];
   List<AnprTrack> _tracks = const [];
+  final Map<String, Map<String, OcrVote>> _ocrVotes = {};
+  final Map<String, String> _trackPlates = {};
+  final Map<String, DateTime> _alertCooldowns = {};
   AnprAlert? _latestAlert;
+  List<NativeModelAssetStatus> _modelAssets = const [];
   String? _selectedCameraId;
   String _runtimeState = 'UNINITIALIZED';
   String _deviceTier = 'AUTO';
@@ -726,6 +1606,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String _environmentLabel = 'GOOD_CONDITION';
   String _plateQualityClass = 'UNKNOWN';
   String _status = 'Native scanner bridge idle';
+  String _latestOcrStatus = 'Waiting for OCR';
   double _cameraFps = 0;
   double _detectorFps = 0;
   double _environmentConfidence = 0;
@@ -750,6 +1631,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   void _handleEvent(AnprEvent event) {
     if (!mounted) return;
+    final state = AppScope.of(context);
     AnprAlert? alertToLog;
     setState(() {
       if (event is RuntimeAnprEvent) {
@@ -769,6 +1651,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _status = event.runtimeState;
       } else if (event is TrackUpdateAnprEvent) {
         _tracks = event.tracks;
+      } else if (event is OcrAnprEvent) {
+        final alert = _handleOcrEvent(event, state);
+        if (alert != null) {
+          _latestAlert = alert;
+          alertToLog = alert;
+        }
       } else if (event is MatchAlertAnprEvent) {
         _latestAlert = event.alert;
         alertToLog = event.alert;
@@ -778,7 +1666,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
     final alert = alertToLog;
     if (alert != null) {
-      final state = AppScope.of(context);
       state.addHistoryLog(
         type: 'DETECTION',
         action: 'Live Scan: ${alert.plate}',
@@ -786,8 +1673,131 @@ class _ScannerScreenState extends State<ScannerScreen> {
         details: '${alert.matchType} match from ${alert.cameraLabel}',
         statusMatch: alert.matchType,
         cameraName: alert.cameraLabel,
+        note: _alertEvidenceNote(alert.evidence),
       );
+      if (state.settings.soundAlerts) {
+        HapticFeedback.mediumImpact().ignore();
+        SystemSound.play(SystemSoundType.alert);
+      }
     }
+  }
+
+  AnprAlert? _handleOcrEvent(OcrAnprEvent event, AppState state) {
+    final rawPlate = event.normalizedPlate.isNotEmpty
+        ? event.normalizedPlate
+        : event.rawText;
+    final characterConfidences = event.characterConfidences
+        .where((item) => item.char.isNotEmpty)
+        .map(
+          (item) => CharacterConfidence(
+            char: item.char,
+            confidence: item.confidence,
+            position: item.position,
+          ),
+        )
+        .toList();
+    final correction = correctMalaysianPlateOcr(
+      rawPlate,
+      options: SpecialPlateCorrectionOptions(
+        ocrConfidence: event.confidence,
+        characterConfidences: characterConfidences,
+      ),
+    );
+    final normalized = correction.normalized.isNotEmpty
+        ? correction.normalized
+        : normalizePlate(rawPlate);
+    if (normalized.isEmpty) {
+      _latestOcrStatus = '${event.trackId}: no readable plate';
+      return null;
+    }
+
+    final votes = Map<String, OcrVote>.from(_ocrVotes[event.trackId] ?? {});
+    final previous = votes[normalized];
+    votes[normalized] = OcrVote(
+      count: (previous?.count ?? 0) + 1,
+      totalConfidence: (previous?.totalConfidence ?? 0) + event.confidence,
+    );
+    _ocrVotes[event.trackId] = votes;
+
+    final consensus = evaluateConsensus(
+      votes,
+      requiredVotes: state.settings.consensusVotes,
+      minConfidence: state.settings.ocrConfidence,
+    );
+    final displayPlate = consensus.displayPlate.isNotEmpty
+        ? consensus.displayPlate
+        : formatDisplayPlate(normalized);
+    _trackPlates[event.trackId] = displayPlate;
+    _latestOcrStatus =
+        '${event.trackId}: $displayPlate ${(event.confidence * 100).round()}% '
+        '(${consensus.voteCount}/${state.settings.consensusVotes})';
+
+    if (!consensus.isStabilized) return null;
+
+    final match = evaluateDatabaseMatch(
+      consensus.normalizedPlate,
+      consensus.confidence,
+      state.vehicles,
+      characterConfidences: characterConfidences,
+      minConfidenceThreshold: state.settings.ocrConfidence,
+    );
+    if (match.matchType != MatchType.exact &&
+        match.matchType != MatchType.possible) {
+      return null;
+    }
+
+    final cooldownKey =
+        '${event.trackId}:${match.normalizedPlate}:${match.matchType.code}';
+    final now = DateTime.now().toUtc();
+    final lastAlert = _alertCooldowns[cooldownKey];
+    if (lastAlert != null && now.difference(lastAlert).inSeconds < 45) {
+      return null;
+    }
+    _alertCooldowns[cooldownKey] = now;
+
+    final matchedVehicle = match.matchedVehicle ??
+        _firstWhereOrNull(match.possibleMatches, (_) => true);
+    final track =
+        _firstWhereOrNull(_tracks, (item) => item.trackId == event.trackId);
+    return AnprAlert(
+      trackId: event.trackId,
+      plate: match.normalizedPlate,
+      confidence: match.confidence,
+      matchType: match.matchType.code,
+      cameraLabel: _currentCameraLabel(),
+      reason: match.reason,
+      vehicle: matchedVehicle == null
+          ? const <String, dynamic>{}
+          : _vehicleToAlertMap(matchedVehicle),
+      evidence: <String, dynamic>{
+        'vehicleImagePath': event.vehicleImagePath,
+        'plateImagePath': event.plateImagePath,
+        'plateEnhancedImagePath': event.plateEnhancedImagePath,
+        'plateBinaryImagePath': event.plateBinaryImagePath,
+        'plateTopLineImagePath': event.plateTopLineImagePath,
+        'plateBottomLineImagePath': event.plateBottomLineImagePath,
+        'plateInnerTextImagePath': event.plateInnerTextImagePath,
+        'plateCropWidth': event.plateCropWidth,
+        'plateCropHeight': event.plateCropHeight,
+        'preprocessingVariant': event.preprocessingVariant,
+        'preprocessingVariants': event.preprocessingVariants,
+        'capturedAt': event.timestamp.toUtc().toIso8601String(),
+        'qualityScore': track?.qualityScore ?? _plateQualityScore,
+        'detectorConfidence': track?.detectorConfidence ?? 0,
+        'ocrConfidence': consensus.confidence,
+        'ocrProvider': event.provider.isNotEmpty ? event.provider : _ocrProvider,
+        'environment': _environmentLabel,
+        'qualityClass': track?.qualityClass ?? _plateQualityClass,
+      },
+    );
+  }
+
+  String _currentCameraLabel() {
+    return _firstWhereOrNull(
+          _nativeCameras,
+          (camera) => camera.id == _selectedCameraId,
+        )?.label ??
+        'Native Scanner';
   }
 
   void _handleBridgeError(Object error) {
@@ -799,10 +1809,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _initialize() async {
+    final state = AppScope.of(context);
     setState(() => _busy = true);
     try {
       final status = await _bridge.initialize();
       final cameras = await _bridge.listCameras();
+      final preferredCameraId = state.selectedCameraId;
+      final defaultCameraId =
+          _firstWhereOrNull(cameras, (camera) => camera.isDefault)?.id ??
+              (cameras.isNotEmpty ? cameras.first.id : null);
+      final nextCameraId =
+          cameras.any((camera) => camera.id == preferredCameraId)
+              ? preferredCameraId
+              : defaultCameraId;
       setState(() {
         _runtimeState = status.runtimeState;
         _deviceTier = status.deviceTier;
@@ -810,12 +1829,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _ocrProvider = status.ocrProvider;
         _environmentProvider = status.environmentProvider;
         _plateQualityProvider = status.plateQualityProvider;
+        _modelAssets = status.modelAssets;
         _nativeCameras = cameras;
-        _selectedCameraId =
-            _firstWhereOrNull(cameras, (camera) => camera.isDefault)?.id ??
-                (cameras.isNotEmpty ? cameras.first.id : null);
+        _selectedCameraId = nextCameraId;
         _status = 'Native runtime ${status.runtimeState}';
       });
+      state.setSelectedCameraId(nextCameraId);
+      if (nextCameraId != null) {
+        await _bridge.selectCamera(nextCameraId);
+      }
     } catch (error) {
       setState(() => _status = _friendlyBridgeError(error));
     } finally {
@@ -826,6 +1848,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _start() async {
     final state = AppScope.of(context);
     final cameraId = _selectedCameraId ?? 'native-back';
+    state.setSelectedCameraId(cameraId);
     setState(() {
       _busy = true;
       _status = 'Starting native scanner';
@@ -841,6 +1864,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
         enableSpecialSeries: state.settings.enableSpecialSeries,
       );
       setState(() {
+        _ocrVotes.clear();
+        _trackPlates.clear();
+        _alertCooldowns.clear();
+        _latestOcrStatus = 'Waiting for OCR';
         _scanning = true;
         _runtimeState = 'SCANNING';
         _status = 'Scanning selected camera';
@@ -868,7 +1895,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
           _scanning = false;
           _runtimeState = 'READY';
           _status = 'Scanner stopped';
+          _latestOcrStatus = 'Waiting for OCR';
           _tracks = const [];
+          _ocrVotes.clear();
+          _trackPlates.clear();
         });
       }
     }
@@ -880,6 +1910,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final selectedCamera = _firstWhereOrNull(
         _nativeCameras, (camera) => camera.id == _selectedCameraId);
     final cameraLabel = selectedCamera?.label ?? 'Rear Camera';
+    final requiredModelCount =
+        _modelAssets.where((asset) => asset.required).length;
+    final readyRequiredModelCount = _modelAssets
+        .where((asset) => asset.required && asset.nativeReady)
+        .length;
+    final missingOptionalModelCount = _modelAssets
+        .where((asset) => !asset.required && !asset.available)
+        .length;
 
     return ListView(
       children: [
@@ -920,6 +1958,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 ? null
                 : (value) {
                     setState(() => _selectedCameraId = value);
+                    state.setSelectedCameraId(value);
                     if (value != null) _bridge.selectCamera(value).ignore();
                   },
           ),
@@ -941,8 +1980,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       label: state.t('cameraPreview'), value: cameraLabel),
                   MetricChip(label: 'Runtime', value: _runtimeState),
                   MetricChip(label: 'Tier', value: _deviceTier),
+                  if (_modelAssets.isNotEmpty)
+                    MetricChip(
+                      label: 'Models',
+                      value: '$readyRequiredModelCount/$requiredModelCount',
+                    ),
                   MetricChip(label: 'Detector', value: _detectorProvider),
                   MetricChip(label: 'OCR', value: _ocrProvider),
+                  MetricChip(label: 'OCR State', value: _latestOcrStatus),
                   MetricChip(
                       label: state.t('cameraFps'),
                       value: _cameraFps.toStringAsFixed(1)),
@@ -962,6 +2007,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   MetricChip(
                       label: 'Quality Provider', value: _plateQualityProvider),
                   MetricChip(label: 'OCR Queue', value: '$_ocrQueueDepth'),
+                  if (missingOptionalModelCount > 0)
+                    MetricChip(
+                      label: 'Optional Models',
+                      value: '$missingOptionalModelCount missing',
+                    ),
                 ],
               ),
             ],
@@ -984,8 +2034,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.center_focus_strong,
                         color: Color(0xFF22D3EE)),
-                    title:
-                        Text(track.plate.isEmpty ? track.trackId : track.plate),
+                    title: Text(_trackPlates[track.trackId] ??
+                        (track.plate.isEmpty ? track.trackId : track.plate)),
                     subtitle: Text(
                         '${track.pipelineState} · ${track.state} · ${track.qualityClass}'),
                     trailing: Text('${(track.confidence * 100).round()}%'),
@@ -1015,36 +2065,54 @@ class CameraSurface extends StatelessWidget {
     return AspectRatio(
       aspectRatio: 16 / 10,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: ColoredBox(
-          color: const Color(0xFF020617),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (scanning)
-                    const PlatformCameraPreview()
-                  else
-                    const CameraIdleView(),
-                  for (final track in tracks)
-                    Positioned(
-                      left: track.bbox.x * constraints.maxWidth,
-                      top: track.bbox.y * constraints.maxHeight,
-                      width: track.bbox.width * constraints.maxWidth,
-                      height: track.bbox.height * constraints.maxHeight,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                              color: _trackColor(track.matchType), width: 2),
-                          borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(16),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: TrackColors.bgDeep,
+            border: Border.all(color: const Color(0x66155E75)),
+          ),
+          child: ColoredBox(
+            color: TrackColors.bgDeep,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (scanning)
+                      const PlatformCameraPreview()
+                    else
+                      const CameraIdleView(),
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: const Color(0x3322D3EE),
+                              width: 1,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  if (alert != null) AlertOverlay(alert: alert!),
-                ],
-              );
-            },
+                    for (final track in tracks)
+                      Positioned(
+                        left: track.bbox.x * constraints.maxWidth,
+                        top: track.bbox.y * constraints.maxHeight,
+                        width: track.bbox.width * constraints.maxWidth,
+                        height: track.bbox.height * constraints.maxHeight,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                                color: _trackColor(track.matchType), width: 2),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                        ),
+                      ),
+                    if (alert != null) AlertOverlay(alert: alert!),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -1080,13 +2148,14 @@ class CameraIdleView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.camera_alt_outlined, color: Color(0xFF22D3EE), size: 44),
+          Icon(Icons.camera_alt_outlined, color: TrackColors.cyan, size: 44),
           SizedBox(height: 8),
           Text('Native camera preview',
-              style: TextStyle(fontWeight: FontWeight.w800)),
+              style: TextStyle(
+                  color: TrackColors.text, fontWeight: FontWeight.w900)),
           SizedBox(height: 4),
           Text('Tap start scanning to open the native camera.',
-              style: TextStyle(color: Color(0xFF94A3B8))),
+              style: TextStyle(color: TrackColors.muted)),
         ],
       ),
     );
@@ -1106,9 +2175,12 @@ class AlertOverlay extends StatelessWidget {
         margin: const EdgeInsets.all(10),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: const Color(0xFFDC2626),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFFCA5A5), width: 2),
+          color: const Color(0xE6991111),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFFCA5A5), width: 1.5),
+          boxShadow: const [
+            BoxShadow(color: Color(0xAA450A0A), blurRadius: 20),
+          ],
         ),
         child: Row(
           children: [
@@ -1757,6 +2829,11 @@ class SettingsScreen extends StatelessWidget {
                 onChanged: (value) => state.updateSettings(
                     settings.copyWith(enableSpecialSeries: value)),
               ),
+              SpecialSeriesPrefixEditor(
+                prefixes: state.runtimeSpecialSeriesPrefixes,
+                enabled: state.canManageSystem,
+                onChanged: state.setRuntimeSpecialSeriesPrefixText,
+              ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(state.t('soundAlertSetting')),
@@ -1793,6 +2870,107 @@ class SettingsScreen extends StatelessWidget {
         const SizedBox(height: 10),
         MoreScreen(showHeader: true),
       ],
+    );
+  }
+}
+
+class SpecialSeriesPrefixEditor extends StatefulWidget {
+  const SpecialSeriesPrefixEditor({
+    super.key,
+    required this.prefixes,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final List<String> prefixes;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<SpecialSeriesPrefixEditor> createState() =>
+      _SpecialSeriesPrefixEditorState();
+}
+
+class _SpecialSeriesPrefixEditorState extends State<SpecialSeriesPrefixEditor> {
+  late final TextEditingController _controller;
+  String _lastAppliedText = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _lastAppliedText = widget.prefixes.join(', ');
+    _controller = TextEditingController(text: _lastAppliedText);
+  }
+
+  @override
+  void didUpdateWidget(covariant SpecialSeriesPrefixEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextText = widget.prefixes.join(', ');
+    if (nextText != _lastAppliedText) {
+      _lastAppliedText = nextText;
+      _controller.text = nextText;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final text = _controller.text;
+    _lastAppliedText = text;
+    widget.onChanged(text);
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _remove(String prefix) {
+    final nextPrefixes =
+        widget.prefixes.where((item) => item != prefix).join(', ');
+    _controller.text = nextPrefixes;
+    _lastAppliedText = nextPrefixes;
+    widget.onChanged(nextPrefixes);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _controller,
+            enabled: widget.enabled,
+            textCapitalization: TextCapitalization.characters,
+            decoration: InputDecoration(
+              labelText: 'Runtime Special Prefixes',
+              prefixIcon: const Icon(Icons.local_police_outlined),
+              suffixIcon: IconButton(
+                tooltip: 'Save prefixes',
+                onPressed: widget.enabled ? _save : null,
+                icon: const Icon(Icons.save_outlined),
+              ),
+            ),
+            onSubmitted: (_) => _save(),
+          ),
+          if (widget.prefixes.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final prefix in widget.prefixes)
+                  InputChip(
+                    label: Text(prefix),
+                    onDeleted: widget.enabled ? () => _remove(prefix) : null,
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1869,13 +3047,50 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
         const SizedBox(height: 10),
         SectionCard(
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const CircleAvatar(
-                radius: 28, child: Icon(Icons.person_outline)),
-            title: Text(user?.name ?? '-'),
-            subtitle: Text(user?.email ?? '-'),
-            trailing: Text(user?.role.code ?? '-'),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 28,
+                backgroundColor: const Color(0xCC082F49),
+                foregroundColor: TrackColors.cyan,
+                child: Text(
+                  (user?.name.isNotEmpty ?? false)
+                      ? user!.name.characters.first.toUpperCase()
+                      : '?',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      user?.name ?? '-',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: TrackColors.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      user?.email ?? '-',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: TrackColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (user != null) _RoleBadge(role: user.role),
+            ],
           ),
         ),
         SectionCard(
@@ -1970,14 +3185,52 @@ class MoreScreen extends StatelessWidget {
             SectionTitle(icon: Icons.more_horiz, title: state.t('moreMenu')),
             const SizedBox(height: 8),
           ],
-          for (final item in items)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(item.icon, color: const Color(0xFF22D3EE)),
-              title: Text(item.label),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => state.go(item.section),
-            ),
+          GridView.count(
+            crossAxisCount: MediaQuery.sizeOf(context).width < 520 ? 2 : 4,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 2.4,
+            children: [
+              for (final item in items)
+                InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () => state.go(item.section),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: item.section == state.section
+                          ? const Color(0xCC082F49)
+                          : TrackColors.field,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: item.section == state.section
+                            ? const Color(0x6622D3EE)
+                            : TrackColors.border,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(item.icon, color: TrackColors.cyan, size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            item.label,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: TrackColors.text,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -1999,11 +3252,39 @@ class PermissionPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     return SectionCard(
-      child: ListTile(
-        leading: const Icon(Icons.lock_outline, color: Color(0xFF22D3EE)),
-        title: Text(state.t('readOnlyBadge')),
-        subtitle: const Text(
-            'This section follows the existing ADMIN / SUPER_ADMIN permission rule.'),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xCC082F49),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0x66155E75)),
+            ),
+            child: const Icon(Icons.lock_outline, color: TrackColors.cyan),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  state.t('readOnlyBadge'),
+                  style: const TextStyle(
+                    color: TrackColors.text,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'This section follows the existing ADMIN / SUPER_ADMIN permission rule.',
+                  style: TextStyle(color: TrackColors.muted, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2366,44 +3647,81 @@ class VehicleListCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        title: Text(vehicle.plate,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-        subtitle: Text(
-          '${vehicle.brand} ${vehicle.model} / ${vehicle.colour} / ${vehicle.year}\n'
-          '${vehicle.customerName} / ${vehicle.financeCompany} / ${vehicle.reference}\n'
-          '${vehicle.status.code} / ${vehicle.remark}',
-        ),
-        isThreeLine: true,
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(vehicle.priority.code,
-                    style: const TextStyle(
-                        color: Color(0xFF22D3EE), fontWeight: FontWeight.w900)),
-                Text(_currency(vehicle.outstandingAmount),
-                    style: const TextStyle(
-                        color: Color(0xFF94A3B8), fontSize: 12)),
-              ],
-            ),
-            if (canEdit)
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'edit') onEdit?.call();
-                  if (value == 'delete') onDelete?.call();
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(value: 'edit', child: Text('Edit')),
-                  PopupMenuItem(value: 'delete', child: Text('Delete')),
-                ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  vehicle.plate,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TrackColors.cyan,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
               ),
+              _StatusBadge(label: vehicle.status.code),
+              if (canEdit)
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: TrackColors.muted),
+                  onSelected: (value) {
+                    if (value == 'edit') onEdit?.call();
+                    if (value == 'delete') onDelete?.call();
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${vehicle.brand} ${vehicle.model} / ${vehicle.colour} / ${vehicle.year}',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: TrackColors.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${vehicle.customerName} / ${vehicle.financeCompany} / ${vehicle.reference}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: TrackColors.muted, fontSize: 12),
+          ),
+          if (vehicle.remark.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              vehicle.remark,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: TrackColors.muted2, fontSize: 12),
+            ),
           ],
-        ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _PriorityBadge(label: vehicle.priority.code),
+              const Spacer(),
+              Text(
+                _currency(vehicle.outstandingAmount),
+                style: const TextStyle(
+                  color: TrackColors.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -2432,45 +3750,156 @@ class UserListCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: CircleAvatar(
-            child: Text(user.name.isEmpty
-                ? '?'
-                : user.name.characters.first.toUpperCase())),
-        title: Text(user.name,
-            style: const TextStyle(fontWeight: FontWeight.w800)),
-        subtitle: Text(
-            '${user.email}\n${user.phone} / ${user.status} / ${_formatTime(user.lastLogin)}'),
-        isThreeLine: true,
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(user.role.code,
-                style: const TextStyle(fontWeight: FontWeight.w800)),
-            PopupMenuButton<String>(
-              onSelected: (value) {
-                if (value == 'edit') onEdit();
-                if (value == 'toggle') onToggle();
-                if (value == 'reset') onResetPassword();
-                if (value == 'delete') onDelete();
-                if (value == 'history') onViewHistory();
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                const PopupMenuItem(
-                    value: 'history', child: Text('View History')),
-                PopupMenuItem(
-                    value: 'toggle',
-                    child:
-                        Text(user.status == 'ACTIVE' ? 'Disable' : 'Enable')),
-                const PopupMenuItem(
-                    value: 'reset', child: Text('Reset Password')),
-                if (canDelete)
-                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 21,
+            backgroundColor: const Color(0xCC082F49),
+            foregroundColor: TrackColors.cyan,
+            child: Text(
+              user.name.isEmpty ? '?' : user.name.characters.first.toUpperCase(),
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        user.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: TrackColors.text,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    _RoleBadge(role: user.role),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  user.email,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: TrackColors.muted, fontSize: 12),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${user.phone} / ${user.status} / ${_formatTime(user.lastLogin)}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: TrackColors.muted2, fontSize: 11),
+                ),
               ],
             ),
-          ],
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: TrackColors.muted),
+            onSelected: (value) {
+              if (value == 'edit') onEdit();
+              if (value == 'toggle') onToggle();
+              if (value == 'reset') onResetPassword();
+              if (value == 'delete') onDelete();
+              if (value == 'history') onViewHistory();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'edit', child: Text('Edit')),
+              const PopupMenuItem(
+                  value: 'history', child: Text('View History')),
+              PopupMenuItem(
+                  value: 'toggle',
+                  child: Text(user.status == 'ACTIVE' ? 'Disable' : 'Enable')),
+              const PopupMenuItem(
+                  value: 'reset', child: Text('Reset Password')),
+              if (canDelete)
+                const PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = switch (label) {
+      'ACTIVE' => TrackColors.emerald,
+      'FLAGGED' => TrackColors.red,
+      'PENDING' => TrackColors.amber,
+      'CLEARED' => TrackColors.cyan,
+      _ => TrackColors.muted,
+    };
+    return _TinyBadge(label: label, tone: tone);
+  }
+}
+
+class _PriorityBadge extends StatelessWidget {
+  const _PriorityBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = switch (label) {
+      'HIGH' || 'URGENT' => TrackColors.red,
+      'MEDIUM' => TrackColors.amber,
+      'LOW' => TrackColors.emerald,
+      _ => TrackColors.cyan,
+    };
+    return _TinyBadge(label: label, tone: tone);
+  }
+}
+
+class _RoleBadge extends StatelessWidget {
+  const _RoleBadge({required this.role});
+
+  final Role role;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = switch (role) {
+      Role.superAdmin => TrackColors.cyan,
+      Role.admin => TrackColors.blue,
+      Role.user => TrackColors.muted,
+    };
+    return _TinyBadge(label: role.code, tone: tone);
+  }
+}
+
+class _TinyBadge extends StatelessWidget {
+  const _TinyBadge({required this.label, required this.tone});
+
+  final String label;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(tone.withAlpha(38), TrackColors.field),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: tone.withAlpha(130)),
+      ),
+      child: Text(
+        label,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: tone,
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
+          height: 1,
         ),
       ),
     );
@@ -2531,21 +3960,67 @@ class VehicleMatchCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(
-          tone == 'EXACT' ? Icons.warning_amber : Icons.help_outline,
-          color: tone == 'EXACT'
-              ? const Color(0xFFF87171)
-              : const Color(0xFFFBBF24),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: TrackColors.field,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: tone == 'EXACT'
+                ? const Color(0x99F87171)
+                : const Color(0x99FBBF24),
+          ),
         ),
-        title: Text(vehicle.plate,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-        subtitle: Text(
-            '${vehicle.brand} ${vehicle.model} · ${vehicle.customerName}\n${vehicle.financeCompany} · ${vehicle.reference}'),
-        isThreeLine: true,
-        trailing:
-            Text(tone, style: const TextStyle(fontWeight: FontWeight.w900)),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              tone == 'EXACT' ? Icons.warning_amber : Icons.help_outline,
+              color: tone == 'EXACT' ? TrackColors.red : TrackColors.amber,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    vehicle.plate,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: TrackColors.cyan,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      height: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${vehicle.brand} ${vehicle.model} / ${vehicle.customerName}',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: TrackColors.text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${vehicle.financeCompany} / ${vehicle.reference}',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: TrackColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _TinyBadge(
+              label: tone,
+              tone: tone == 'EXACT' ? TrackColors.red : TrackColors.amber,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2559,15 +4034,57 @@ class HistoryListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(_historyIcon(log.type), color: const Color(0xFF22D3EE)),
-        title: Text(log.plate ?? log.action,
-            style: const TextStyle(fontWeight: FontWeight.w900)),
-        subtitle: Text('${log.details}\n${_formatTime(log.timestamp)}'),
-        isThreeLine: true,
-        trailing: Text(log.statusMatch ?? log.type,
-            style: const TextStyle(fontWeight: FontWeight.w800)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xCC082F49),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0x66155E75)),
+            ),
+            child: Icon(_historyIcon(log.type),
+                color: TrackColors.cyan, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  log.plate ?? log.action,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TrackColors.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  log.details,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: TrackColors.muted, fontSize: 12),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _formatTime(log.timestamp),
+                  style:
+                      const TextStyle(color: TrackColors.muted2, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _TinyBadge(
+            label: log.statusMatch ?? log.type,
+            tone: _historyTone(log.statusMatch ?? log.type),
+          ),
+        ],
       ),
     );
   }
@@ -2660,10 +4177,21 @@ class EmptyPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.inbox_outlined, color: Color(0xFF22D3EE)),
-        title: Text(message),
+      child: Row(
+        children: [
+          const Icon(Icons.inbox_outlined, color: TrackColors.cyan),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: TrackColors.muted,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2736,30 +4264,51 @@ class StatTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SectionCard(
+    return Container(
+      constraints: const BoxConstraints(minHeight: 76),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: TrackColors.panel,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0x66155E75)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x66020617),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Flexible(
+              Expanded(
                 child: Text(
                   label.toUpperCase(),
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      color: Color(0xFF94A3B8),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800),
+                    color: TrackColors.muted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                  ),
                 ),
               ),
-              Icon(icon, color: const Color(0xFF22D3EE), size: 18),
+              Icon(icon, color: TrackColors.cyan, size: 16),
             ],
           ),
-          Text(value,
-              style:
-                  const TextStyle(fontSize: 28, fontWeight: FontWeight.w900)),
+          Text(
+            value,
+            style: const TextStyle(
+              color: TrackColors.text,
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
+              height: 1,
+            ),
+          ),
         ],
       ),
     );
@@ -2773,15 +4322,23 @@ class SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: const Color(0xFF0F172A),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFF1E293B)),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: TrackColors.panel,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: TrackColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x52020617),
+            blurRadius: 20,
+            offset: Offset(0, 8),
+          ),
+        ],
       ),
-      margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
+      child: DefaultTextStyle.merge(
+        style: const TextStyle(color: TrackColors.text),
         child: child,
       ),
     );
@@ -2802,13 +4359,18 @@ class SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, color: const Color(0xFF22D3EE), size: 20),
+        Icon(icon, color: TrackColors.cyan, size: 18),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
             title.toUpperCase(),
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+            style: const TextStyle(
+              color: TrackColors.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0,
+            ),
           ),
         ),
       ],
@@ -2824,28 +4386,21 @@ class MetricChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Chip(
-      label: Text('$label: $value', overflow: TextOverflow.ellipsis),
-      side: const BorderSide(color: Color(0xFF1E293B)),
-      backgroundColor: const Color(0xFF020617),
-    );
-  }
-}
-
-class _RolePill extends StatelessWidget {
-  const _RolePill({required this.role});
-
-  final Role role;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: Chip(
-        label: Text(role.code,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
-        backgroundColor: const Color(0xFF082F49),
-        side: const BorderSide(color: Color(0xFF155E75)),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: TrackColors.field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: TrackColors.border),
+      ),
+      child: Text(
+        '$label: $value',
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: TrackColors.muted,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }
@@ -2994,6 +4549,67 @@ String _nextUserId(List<AppUser> users) {
   return 'user-${next.toString().padLeft(3, '0')}';
 }
 
+Map<String, dynamic> _vehicleToAlertMap(Vehicle vehicle) {
+  return <String, dynamic>{
+    'id': vehicle.id,
+    'plate': vehicle.plate,
+    'customerName': vehicle.customerName,
+    'customerId': vehicle.customerId,
+    'phone': vehicle.phone,
+    'brand': vehicle.brand,
+    'model': vehicle.model,
+    'colour': vehicle.colour,
+    'year': vehicle.year,
+    'financeCompany': vehicle.financeCompany,
+    'outstandingAmount': vehicle.outstandingAmount,
+    'reference': vehicle.reference,
+    'priority': vehicle.priority.code,
+    'status': vehicle.status.code,
+    'remark': vehicle.remark,
+  };
+}
+
+String? _alertEvidenceNote(Map<String, dynamic> evidence) {
+  final vehicleImagePath = evidence['vehicleImagePath']?.toString() ?? '';
+  final plateImagePath = evidence['plateImagePath']?.toString() ?? '';
+  final enhancedPlateImagePath =
+      evidence['plateEnhancedImagePath']?.toString() ?? '';
+  final binaryPlateImagePath =
+      evidence['plateBinaryImagePath']?.toString() ?? '';
+  final topLineImagePath = evidence['plateTopLineImagePath']?.toString() ?? '';
+  final bottomLineImagePath =
+      evidence['plateBottomLineImagePath']?.toString() ?? '';
+  final innerTextImagePath =
+      evidence['plateInnerTextImagePath']?.toString() ?? '';
+  final preprocessingVariant =
+      evidence['preprocessingVariant']?.toString() ?? '';
+  final preprocessingVariants =
+      ((evidence['preprocessingVariants'] as List?) ?? const <Object?>[])
+          .map((item) => item?.toString() ?? '')
+          .where((item) => item.isNotEmpty)
+          .join(', ');
+  final cropWidth = evidence['plateCropWidth']?.toString() ?? '';
+  final cropHeight = evidence['plateCropHeight']?.toString() ?? '';
+  if (vehicleImagePath.isEmpty &&
+      plateImagePath.isEmpty &&
+      enhancedPlateImagePath.isEmpty &&
+      binaryPlateImagePath.isEmpty &&
+      topLineImagePath.isEmpty &&
+      bottomLineImagePath.isEmpty &&
+      innerTextImagePath.isEmpty) {
+    return null;
+  }
+  return 'Vehicle image: $vehicleImagePath\n'
+      'Plate image: $plateImagePath\n'
+      'Enhanced plate image: $enhancedPlateImagePath\n'
+      'Binary plate image: $binaryPlateImagePath\n'
+      'Top line image: $topLineImagePath\n'
+      'Bottom line image: $bottomLineImagePath\n'
+      'Inner text image: $innerTextImagePath\n'
+      'Preprocessing: $preprocessingVariant $cropWidth x $cropHeight\n'
+      'Variants: $preprocessingVariants';
+}
+
 String _vehiclesToCsv(List<Vehicle> vehicles) {
   final rows = <List<Object?>>[
     [
@@ -3079,6 +4695,26 @@ IconData _historyIcon(String type) {
       return Icons.people_alt_outlined;
     default:
       return Icons.search;
+  }
+}
+
+Color _historyTone(String value) {
+  switch (value) {
+    case 'EXACT':
+    case 'FLAGGED':
+      return TrackColors.red;
+    case 'POSSIBLE':
+    case 'PENDING':
+      return TrackColors.amber;
+    case 'NONE':
+    case 'CLEARED':
+      return TrackColors.emerald;
+    case 'DETECTION':
+      return TrackColors.blue;
+    case 'SEARCH':
+      return TrackColors.purple;
+    default:
+      return TrackColors.cyan;
   }
 }
 

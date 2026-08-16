@@ -21,13 +21,28 @@ Request:
 ```json
 {
   "modelAssets": {
-    "detector": "assets/public/models/plate-detector.onnx",
-    "ocr": "assets/public/models/ppocr-rec.onnx",
-    "ocrDictionary": "assets/public/models/ppocr-dict.txt",
-    "environment": "assets/public/models/environment-classifier.onnx",
-    "environmentMetadata": "assets/public/models/environment-classifier.metadata.json",
-    "plateQuality": "assets/public/models/plate-quality-classifier.onnx",
-    "plateQualityMetadata": "assets/public/models/plate-quality-classifier.metadata.json"
+    "detector": "public/models/plate-detector.onnx",
+    "ocr": "public/models/ppocr-rec.onnx",
+    "ocrDictionary": "public/models/ppocr-dict.txt",
+    "environment": "public/models/environment-classifier.onnx",
+    "environmentMetadata": "public/models/environment-classifier.metadata.json",
+    "plateQuality": "public/models/plate-quality-classifier.onnx",
+    "plateQualityMetadata": "public/models/plate-quality-classifier.metadata.json"
+  },
+  "modelAssetStatus": [
+    {
+      "id": "detector",
+      "path": "public/models/plate-detector.onnx",
+      "required": true,
+      "available": true,
+      "sizeBytes": 3355443,
+      "nativePath": "/app/Application Support/plateq-models/detector.onnx"
+    }
+  ],
+  "stagedModelAssets": {
+    "detector": "/app/Application Support/plateq-models/detector.onnx",
+    "ocr": "/app/Application Support/plateq-models/ocr.onnx",
+    "ocrDictionary": "/app/Application Support/plateq-models/ocrDictionary.txt"
   },
   "deviceTier": "AUTO",
   "enableHardwareAcceleration": true
@@ -40,11 +55,25 @@ Response:
 {
   "runtimeState": "READY",
   "deviceTier": "MEDIUM",
-  "detectorProvider": "CPU",
-  "ocrProvider": "CPU",
+  "detectorProvider": "CPU_ONNX/FALLBACK",
+  "ocrProvider": "CPU_ONNX_PP_OCR/FALLBACK",
   "environmentProvider": "CPU",
   "plateQualityProvider": "HEURISTIC",
-  "warnings": []
+  "modelProviderStatus": {
+    "detector": {
+      "state": "READY",
+      "nativePath": "/app/Application Support/plateq-models/detector.onnx",
+      "sizeBytes": 3355443,
+      "inputNames": ["images"],
+      "outputNames": ["output0"]
+    },
+    "ocr": {
+      "state": "UNAVAILABLE",
+      "error": "Native model path was not staged."
+    }
+  },
+  "warnings": [],
+  "modelAssetStatus": []
 }
 ```
 
@@ -145,7 +174,21 @@ Every event must contain:
   "cameraFps": 30.0,
   "ocrQueueDepth": 1,
   "temperatureState": "NOMINAL",
-  "memoryMb": 184.2
+  "memoryMb": 184.2,
+  "detectorProvider": "CPU_ONNX_READY/FALLBACK",
+  "ocrProvider": "CPU_ONNX_PP_OCR/FALLBACK",
+  "environmentProvider": "CPU_ONNX_READY/FALLBACK",
+  "plateQualityProvider": "NATIVE_HEURISTIC",
+  "modelProviderStatus": {
+    "detector": { "state": "READY" },
+    "ocr": {
+      "state": "READY",
+      "dictionaryReady": true,
+      "dictionaryEntries": 6625
+    },
+    "environment": { "state": "READY" },
+    "plateQuality": { "state": "UNAVAILABLE" }
+  }
 }
 ```
 
@@ -198,6 +241,26 @@ Bounding boxes use normalized camera-preview coordinates in the range `0.0` to `
   "layout": "SINGLE_LINE",
   "category": "STANDARD",
   "patternScore": 0.88,
+  "provider": "CPU_ONNX_PP_OCR",
+  "vehicleImagePath": "/app/cache/plateq-evidence/track-42-100-vehicle.jpg",
+  "plateImagePath": "/app/cache/plateq-evidence/track-42-100-plate.jpg",
+  "plateEnhancedImagePath": "/app/cache/plateq-evidence/track-42-100-plate-enhanced.jpg",
+  "plateBinaryImagePath": "/app/cache/plateq-evidence/track-42-100-plate-binary.jpg",
+  "plateTopLineImagePath": "/app/cache/plateq-evidence/track-42-100-plate-top-line.jpg",
+  "plateBottomLineImagePath": "/app/cache/plateq-evidence/track-42-100-plate-bottom-line.jpg",
+  "plateInnerTextImagePath": "/app/cache/plateq-evidence/track-42-100-plate-inner-text.jpg",
+  "plateCropWidth": 180,
+  "plateCropHeight": 42,
+  "preprocessingVariant": "ADAPTIVE_CONTRAST",
+  "preprocessingVariants": [
+    "RAW_CROP",
+    "ADAPTIVE_CONTRAST",
+    "BINARY_THRESHOLD",
+    "TOP_LINE",
+    "BOTTOM_LINE",
+    "INNER_TEXT",
+    "DESKEWED_ROTATION"
+  ],
   "characterConfidences": [
     { "char": "A", "confidence": 0.95, "position": 0 }
   ]

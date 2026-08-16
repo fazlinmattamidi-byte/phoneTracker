@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
 import '../anpr/matching_engine.dart';
 import '../anpr/plate_types.dart';
+import '../anpr/special_series.dart' as special_series;
 import 'api_client.dart';
 import 'auth_repository.dart';
 import 'domain.dart';
 import 'localization.dart';
+import 'native_app_storage.dart';
 
 enum AppThemeChoice {
   dark,
@@ -48,8 +51,12 @@ class VehicleImportSummary {
 }
 
 class AppState extends ChangeNotifier {
-  AppState();
+  AppState({NativeAppStorage? appStorage})
+      : appStorage = appStorage ?? const NativeAppStorage();
 
+  static const _localRepositoryStorageKey = 'localRepositoryV1';
+
+  final NativeAppStorage appStorage;
   final AuthRepository authRepository = AuthRepository();
   late final PlateqApiClient apiClient =
       PlateqApiClient(config: PlateqApiConfig.fromEnvironment());
@@ -64,8 +71,12 @@ class AppState extends ChangeNotifier {
   AppSection section = AppSection.dashboard;
   AppLanguage language = AppLanguage.en;
   AppThemeChoice themeChoice = AppThemeChoice.dark;
+  String? selectedCameraId;
+  final List<String> runtimeSpecialSeriesPrefixes = <String>[];
   bool authReady = false;
   String? authError;
+  bool _hydratingLocalRepository = false;
+  bool _localRepositoryPersistQueued = false;
 
   bool get isAuthenticated => currentUser != null;
   Role get role => currentUser?.role ?? Role.superAdmin;
@@ -74,6 +85,8 @@ class AppState extends ChangeNotifier {
   bool get canManageUsers => isAdminRole;
   bool get canManageVehicles => isAdminRole;
   bool get canManageSystem => role == Role.superAdmin;
+  String get runtimeSpecialSeriesPrefixText =>
+      runtimeSpecialSeriesPrefixes.join(', ');
   String t(String key) => localizedText(language, key);
 
   int get bottomIndex {
@@ -103,6 +116,13 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> restoreSession() async {
+    _hydratingLocalRepository = true;
+    try {
+      await _restoreLocalRepository();
+    } finally {
+      _hydratingLocalRepository = false;
+    }
+
     final restored = await authRepository.restoreSession();
     if (restored != null) {
       final user =
@@ -507,12 +527,93 @@ class AppState extends ChangeNotifier {
         actorName: currentUser?.name,
       ),
     );
+    _queueLocalRepositoryPersist();
     notifyListeners();
   }
 
   void updateSettings(SystemSettings nextSettings) {
     settings = nextSettings;
+    _queueLocalRepositoryPersist();
     notifyListeners();
+  }
+
+  Future<void> _restoreLocalRepository() async {
+    final rawJson = await appStorage.readJson(_localRepositoryStorageKey);
+    if (rawJson == null || rawJson.trim().isEmpty) return;
+
+    try {
+      final decoded = jsonDecode(rawJson);
+      final payload = _asJsonMap(decoded);
+      if (payload == null) return;
+
+      final nextVehicles =
+          _decodeJsonList(payload['vehicles'], _vehicleFromJson);
+      if (nextVehicles != null) {
+        vehicles
+          ..clear()
+          ..addAll(nextVehicles);
+      }
+
+      final nextUsers = _decodeJsonList(payload['users'], _userFromJson);
+      if (nextUsers != null) {
+        users
+          ..clear()
+          ..addAll(nextUsers);
+      }
+
+      final nextHistory = _decodeJsonList(payload['history'], _historyFromJson);
+      if (nextHistory != null) {
+        history
+          ..clear()
+          ..addAll(nextHistory);
+      }
+
+      final nextSettings = _settingsFromJson(_asJsonMap(payload['settings']));
+      if (nextSettings != null) settings = nextSettings;
+
+      language = _languageFromCode(payload['language']) ?? language;
+      themeChoice = _themeFromCode(payload['themeChoice']) ?? themeChoice;
+      selectedCameraId = _nullableJsonString(payload['selectedCameraId']);
+      final nextPrefixes = _parseRuntimeSpecialSeriesPrefixes(
+          payload['runtimeSpecialSeriesPrefixes']);
+      runtimeSpecialSeriesPrefixes
+        ..clear()
+        ..addAll(nextPrefixes);
+      special_series.setRuntimeSpecialSeriesPrefixes(nextPrefixes);
+    } on FormatException catch (error) {
+      debugPrint('PlateQ local storage ignored malformed JSON: $error');
+    } on TypeError catch (error) {
+      debugPrint('PlateQ local storage ignored incompatible JSON: $error');
+    }
+  }
+
+  void _queueLocalRepositoryPersist() {
+    if (_hydratingLocalRepository || _localRepositoryPersistQueued) return;
+    _localRepositoryPersistQueued = true;
+    scheduleMicrotask(() {
+      _localRepositoryPersistQueued = false;
+      unawaited(_persistLocalRepository());
+    });
+  }
+
+  Future<void> _persistLocalRepository() async {
+    final encoded = jsonEncode(_localRepositoryJson());
+    await appStorage.writeJson(_localRepositoryStorageKey, encoded);
+  }
+
+  Map<String, Object?> _localRepositoryJson() {
+    return <String, Object?>{
+      'version': 1,
+      'vehicles': vehicles.map(_vehicleToJson).toList(growable: false),
+      'users': users.map(_userToJson).toList(growable: false),
+      'history': history.map(_historyToJson).toList(growable: false),
+      'settings': _settingsToJson(settings),
+      'language': language.code,
+      'themeChoice': _themeCode(themeChoice),
+      'selectedCameraId': selectedCameraId,
+      'runtimeSpecialSeriesPrefixes':
+          List<String>.of(runtimeSpecialSeriesPrefixes),
+    };
   }
 
   String _nextGeneratedVehicleId() {
@@ -526,16 +627,19 @@ class AppState extends ChangeNotifier {
 
   void setLanguage(AppLanguage nextLanguage) {
     language = nextLanguage;
+    _queueLocalRepositoryPersist();
     notifyListeners();
   }
 
   void toggleLanguage() {
     language = language == AppLanguage.en ? AppLanguage.bm : AppLanguage.en;
+    _queueLocalRepositoryPersist();
     notifyListeners();
   }
 
   void setThemeChoice(AppThemeChoice nextTheme) {
     themeChoice = nextTheme;
+    _queueLocalRepositoryPersist();
     notifyListeners();
   }
 
@@ -543,8 +647,346 @@ class AppState extends ChangeNotifier {
     themeChoice = themeChoice == AppThemeChoice.dark
         ? AppThemeChoice.light
         : AppThemeChoice.dark;
+    _queueLocalRepositoryPersist();
     notifyListeners();
   }
+
+  void setSelectedCameraId(String? cameraId) {
+    final normalized = cameraId?.trim();
+    final nextCameraId =
+        normalized == null || normalized.isEmpty ? null : normalized;
+    if (selectedCameraId == nextCameraId) return;
+    selectedCameraId = nextCameraId;
+    _queueLocalRepositoryPersist();
+    notifyListeners();
+  }
+
+  void setRuntimeSpecialSeriesPrefixes(List<String> prefixes) {
+    final nextPrefixes = _parseRuntimeSpecialSeriesPrefixes(prefixes);
+    if (_stringListsEqual(runtimeSpecialSeriesPrefixes, nextPrefixes)) return;
+    runtimeSpecialSeriesPrefixes
+      ..clear()
+      ..addAll(nextPrefixes);
+    special_series.setRuntimeSpecialSeriesPrefixes(nextPrefixes);
+    _queueLocalRepositoryPersist();
+    notifyListeners();
+  }
+
+  void setRuntimeSpecialSeriesPrefixText(String value) {
+    setRuntimeSpecialSeriesPrefixes(value.split(RegExp(r'[\s,;]+')));
+  }
+}
+
+Map<String, dynamic>? _asJsonMap(Object? value) {
+  if (value is! Map) return null;
+  return value.map((key, value) => MapEntry(key.toString(), value));
+}
+
+List<T>? _decodeJsonList<T>(
+  Object? value,
+  T? Function(Map<String, dynamic> json) decode,
+) {
+  if (value is! List) return null;
+  final decoded = <T>[];
+  for (final item in value) {
+    final map = _asJsonMap(item);
+    if (map == null) continue;
+    final next = decode(map);
+    if (next != null) decoded.add(next);
+  }
+  return decoded;
+}
+
+Map<String, Object?> _vehicleToJson(Vehicle vehicle) {
+  return <String, Object?>{
+    'id': vehicle.id,
+    'plate': vehicle.plate,
+    'customerName': vehicle.customerName,
+    'customerId': vehicle.customerId,
+    'phone': vehicle.phone,
+    'brand': vehicle.brand,
+    'model': vehicle.model,
+    'colour': vehicle.colour,
+    'year': vehicle.year,
+    'financeCompany': vehicle.financeCompany,
+    'outstandingAmount': vehicle.outstandingAmount,
+    'reference': vehicle.reference,
+    'priority': vehicle.priority.code,
+    'status': vehicle.status.code,
+    'remark': vehicle.remark,
+    'createdDate': vehicle.createdDate.toUtc().toIso8601String(),
+    'updatedDate': vehicle.updatedDate.toUtc().toIso8601String(),
+  };
+}
+
+Vehicle? _vehicleFromJson(Map<String, dynamic> json) {
+  try {
+    final now = DateTime.now().toUtc();
+    return Vehicle(
+      id: _jsonString(json['id'], ''),
+      plate: cleanPlateNumber(_jsonString(json['plate'], '')),
+      customerName: _jsonString(json['customerName'], ''),
+      customerId: _jsonString(json['customerId'], ''),
+      phone: _jsonString(json['phone'], ''),
+      brand: _jsonString(json['brand'], 'Unknown'),
+      model: _jsonString(json['model'], 'Unknown'),
+      colour: _jsonString(json['colour'], 'Unknown'),
+      year: _jsonInt(json['year'], now.year),
+      financeCompany: _jsonString(json['financeCompany'], 'Unassigned'),
+      outstandingAmount: _jsonDouble(json['outstandingAmount'], 0),
+      reference: _jsonString(json['reference'], ''),
+      priority:
+          _vehiclePriorityFromCode(json['priority'], VehiclePriority.medium),
+      status: _vehicleStatusFromCode(json['status'], VehicleStatus.active),
+      remark: _jsonString(json['remark'], ''),
+      createdDate: _jsonDate(json['createdDate'], now),
+      updatedDate: _jsonDate(json['updatedDate'], now),
+    );
+  } on Object {
+    return null;
+  }
+}
+
+Map<String, Object?> _userToJson(AppUser user) {
+  return <String, Object?>{
+    'id': user.id,
+    'name': user.name,
+    'email': user.email,
+    'phone': user.phone,
+    'role': user.role.code,
+    'status': user.status,
+    'avatar': user.avatar,
+    'lastLogin': user.lastLogin.toUtc().toIso8601String(),
+    'createdBy': user.createdBy,
+  };
+}
+
+AppUser? _userFromJson(Map<String, dynamic> json) {
+  try {
+    final name = _jsonString(json['name'], 'Mobile User');
+    return AppUser(
+      id: _jsonString(json['id'], ''),
+      name: name,
+      email: _jsonString(json['email'], ''),
+      phone: _jsonString(json['phone'], ''),
+      role: RoleCode.fromCode(_jsonString(json['role'], 'USER')),
+      status: _jsonString(json['status'], 'ACTIVE'),
+      avatar: _jsonString(json['avatar'], _avatarFromName(name)),
+      lastLogin: _jsonDate(json['lastLogin'], DateTime.now().toUtc()),
+      createdBy: _nullableJsonString(json['createdBy']),
+    );
+  } on Object {
+    return null;
+  }
+}
+
+Map<String, Object?> _historyToJson(HistoryLog log) {
+  return <String, Object?>{
+    'id': log.id,
+    'type': log.type,
+    'action': log.action,
+    'plate': log.plate,
+    'details': log.details,
+    'userRole': log.userRole.code,
+    'timestamp': log.timestamp.toUtc().toIso8601String(),
+    'statusMatch': log.statusMatch,
+    'note': log.note,
+    'cameraId': log.cameraId,
+    'cameraName': log.cameraName,
+    'actorId': log.actorId,
+    'actorName': log.actorName,
+  };
+}
+
+HistoryLog? _historyFromJson(Map<String, dynamic> json) {
+  try {
+    return HistoryLog(
+      id: _jsonString(json['id'], ''),
+      type: _jsonString(json['type'], 'SYSTEM'),
+      action: _jsonString(json['action'], ''),
+      plate: _nullableJsonString(json['plate']),
+      details: _jsonString(json['details'], ''),
+      userRole: RoleCode.fromCode(_jsonString(json['userRole'], 'USER')),
+      timestamp: _jsonDate(json['timestamp'], DateTime.now().toUtc()),
+      statusMatch: _nullableJsonString(json['statusMatch']),
+      note: _nullableJsonString(json['note']),
+      cameraId: _nullableJsonString(json['cameraId']),
+      cameraName: _nullableJsonString(json['cameraName']),
+      actorId: _nullableJsonString(json['actorId']),
+      actorName: _nullableJsonString(json['actorName']),
+    );
+  } on Object {
+    return null;
+  }
+}
+
+Map<String, Object?> _settingsToJson(SystemSettings settings) {
+  return <String, Object?>{
+    'detectionConfidence': settings.detectionConfidence,
+    'ocrConfidence': settings.ocrConfidence,
+    'soundAlerts': settings.soundAlerts,
+    'autoRefreshRate': settings.autoRefreshRate,
+    'consensusVotes': settings.consensusVotes,
+    'maxTracks': settings.maxTracks,
+    'maxOcrConcurrency': settings.maxOcrConcurrency,
+    'enableSpecialSeries': settings.enableSpecialSeries,
+    'developerMode': settings.developerMode,
+    'datasetMode': settings.datasetMode,
+  };
+}
+
+SystemSettings? _settingsFromJson(Map<String, dynamic>? json) {
+  if (json == null) return null;
+  return SystemSettings(
+    detectionConfidence: _jsonDouble(
+      json['detectionConfidence'],
+      defaultSettings.detectionConfidence,
+    ),
+    ocrConfidence: _jsonDouble(
+      json['ocrConfidence'],
+      defaultSettings.ocrConfidence,
+    ),
+    soundAlerts: _jsonBool(json['soundAlerts'], defaultSettings.soundAlerts),
+    autoRefreshRate: _jsonInt(
+      json['autoRefreshRate'],
+      defaultSettings.autoRefreshRate,
+    ),
+    consensusVotes: _jsonInt(
+      json['consensusVotes'],
+      defaultSettings.consensusVotes,
+    ),
+    maxTracks: _jsonInt(json['maxTracks'], defaultSettings.maxTracks),
+    maxOcrConcurrency: _jsonInt(
+      json['maxOcrConcurrency'],
+      defaultSettings.maxOcrConcurrency,
+    ),
+    enableSpecialSeries: _jsonBool(
+      json['enableSpecialSeries'],
+      defaultSettings.enableSpecialSeries,
+    ),
+    developerMode: _jsonBool(
+      json['developerMode'],
+      defaultSettings.developerMode,
+    ),
+    datasetMode: _jsonBool(json['datasetMode'], defaultSettings.datasetMode),
+  );
+}
+
+String _jsonString(Object? value, String fallback) {
+  if (value == null) return fallback;
+  final string = value.toString();
+  return string.isEmpty ? fallback : string;
+}
+
+String? _nullableJsonString(Object? value) {
+  if (value == null) return null;
+  final string = value.toString();
+  return string.isEmpty ? null : string;
+}
+
+int _jsonInt(Object? value, int fallback) {
+  if (value is int) return value;
+  if (value is num) return value.round();
+  return int.tryParse(value?.toString() ?? '') ?? fallback;
+}
+
+double _jsonDouble(Object? value, double fallback) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '') ?? fallback;
+}
+
+bool _jsonBool(Object? value, bool fallback) {
+  if (value is bool) return value;
+  final normalized = value?.toString().trim().toLowerCase();
+  if (normalized == 'true') return true;
+  if (normalized == 'false') return false;
+  return fallback;
+}
+
+DateTime _jsonDate(Object? value, DateTime fallback) {
+  final parsed = DateTime.tryParse(value?.toString() ?? '');
+  return parsed?.toUtc() ?? fallback;
+}
+
+VehiclePriority _vehiclePriorityFromCode(
+  Object? value,
+  VehiclePriority fallback,
+) {
+  final normalized = value?.toString().trim().toUpperCase();
+  for (final priority in VehiclePriority.values) {
+    if (priority.code == normalized) return priority;
+  }
+  return fallback;
+}
+
+VehicleStatus _vehicleStatusFromCode(
+  Object? value,
+  VehicleStatus fallback,
+) {
+  final normalized = value?.toString().trim().toUpperCase();
+  for (final status in VehicleStatus.values) {
+    if (status.code == normalized) return status;
+  }
+  return fallback;
+}
+
+AppLanguage? _languageFromCode(Object? value) {
+  final normalized = value?.toString().trim().toUpperCase();
+  for (final language in AppLanguage.values) {
+    if (language.code == normalized) return language;
+  }
+  return null;
+}
+
+String _themeCode(AppThemeChoice theme) {
+  return switch (theme) {
+    AppThemeChoice.dark => 'DARK',
+    AppThemeChoice.light => 'LIGHT',
+  };
+}
+
+AppThemeChoice? _themeFromCode(Object? value) {
+  return switch (value?.toString().trim().toUpperCase()) {
+    'DARK' => AppThemeChoice.dark,
+    'LIGHT' => AppThemeChoice.light,
+    _ => null,
+  };
+}
+
+List<String> _parseRuntimeSpecialSeriesPrefixes(Object? value) {
+  final Iterable<String> rawValues;
+  if (value is List) {
+    rawValues = value.map((item) => item?.toString() ?? '');
+  } else if (value is String) {
+    rawValues = value.split(RegExp(r'[\s,;]+'));
+  } else {
+    rawValues = const <String>[];
+  }
+  final prefixes = <String>{};
+  for (final rawValue in rawValues) {
+    final prefix =
+        rawValue.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '').trim();
+    if (RegExp(r'^[A-Z0-9]{2,15}$').hasMatch(prefix)) {
+      prefixes.add(prefix);
+    }
+  }
+  return prefixes.toList(growable: false);
+}
+
+bool _stringListsEqual(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
+String _avatarFromName(String name) {
+  return (name.isEmpty ? 'MU' : name)
+      .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
+      .padRight(2, 'U')
+      .substring(0, 2)
+      .toUpperCase();
 }
 
 bool _vehicleMatchesSearchScope(

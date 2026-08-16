@@ -5,32 +5,134 @@ import 'package:flutter/services.dart';
 class NativeAnprBridge {
   static const MethodChannel _methods = MethodChannel('plateq.anpr/methods');
   static const EventChannel _events = EventChannel('plateq.anpr/events');
+  static const MethodChannel _modelStaging = MethodChannel('plateq.app/models');
+  static const Map<String, String> modelAssetPaths = <String, String>{
+    'detector': 'public/models/plate-detector.onnx',
+    'ocr': 'public/models/ppocr-rec.onnx',
+    'ocrDictionary': 'public/models/ppocr-dict.txt',
+    'environment': 'public/models/environment-classifier.onnx',
+    'environmentMetadata': 'public/models/environment-classifier.metadata.json',
+    'plateQuality': 'public/models/plate-quality-classifier.onnx',
+    'plateQualityMetadata':
+        'public/models/plate-quality-classifier.metadata.json',
+  };
+
+  static const Set<String> requiredModelAssetIds = <String>{
+    'detector',
+    'ocr',
+    'ocrDictionary',
+    'environment',
+    'environmentMetadata',
+  };
 
   Stream<AnprEvent> get events {
     return _events.receiveBroadcastStream().map(AnprEvent.fromDynamic);
   }
 
   Future<NativeRuntimeStatus> initialize() async {
+    final modelAssets = await verifyModelAssets();
+    final stagedModelAssets = await stageModelAssets(modelAssets);
+    final stagedModelAssetPaths = <String, String>{
+      for (final asset in stagedModelAssets)
+        if (asset.nativePath != null && asset.nativePath!.isNotEmpty)
+          asset.id: asset.nativePath!,
+    };
     final result = await _methods.invokeMethod<Map<dynamic, dynamic>>(
       'initialize',
       <String, Object?>{
-        'modelAssets': const <String, String>{
-          'detector': 'assets/public/models/plate-detector.onnx',
-          'ocr': 'assets/public/models/ppocr-rec.onnx',
-          'ocrDictionary': 'assets/public/models/ppocr-dict.txt',
-          'environment': 'assets/public/models/environment-classifier.onnx',
-          'environmentMetadata':
-              'assets/public/models/environment-classifier.metadata.json',
-          'plateQuality': 'assets/public/models/plate-quality-classifier.onnx',
-          'plateQualityMetadata':
-              'assets/public/models/plate-quality-classifier.metadata.json',
-        },
+        'modelAssets': modelAssetPaths,
+        'modelAssetStatus': stagedModelAssets
+            .map((asset) => asset.toMap())
+            .toList(growable: false),
+        'stagedModelAssets': stagedModelAssetPaths,
         'deviceTier': 'AUTO',
         'enableHardwareAcceleration': true,
       },
     );
     return NativeRuntimeStatus.fromMap(
-        Map<String, dynamic>.from(result ?? const <String, dynamic>{}));
+      Map<String, dynamic>.from(result ?? const <String, dynamic>{}),
+    ).copyWith(
+      modelAssets: stagedModelAssets,
+      extraWarnings: _modelAssetWarnings(stagedModelAssets),
+    );
+  }
+
+  static Future<List<NativeModelAssetStatus>> verifyModelAssets({
+    AssetBundle? bundle,
+  }) async {
+    final assetBundle = bundle ?? rootBundle;
+    final statuses = <NativeModelAssetStatus>[];
+    for (final entry in modelAssetPaths.entries) {
+      final required = requiredModelAssetIds.contains(entry.key);
+      try {
+        final data = await assetBundle.load(entry.value);
+        statuses.add(NativeModelAssetStatus(
+          id: entry.key,
+          path: entry.value,
+          required: required,
+          available: true,
+          sizeBytes: data.lengthInBytes,
+        ));
+      } on Object catch (error) {
+        statuses.add(NativeModelAssetStatus(
+          id: entry.key,
+          path: entry.value,
+          required: required,
+          available: false,
+          sizeBytes: 0,
+          error: error.toString(),
+        ));
+      }
+    }
+    return statuses;
+  }
+
+  static Future<List<NativeModelAssetStatus>> stageModelAssets(
+    List<NativeModelAssetStatus> assets, {
+    AssetBundle? bundle,
+  }) async {
+    final assetBundle = bundle ?? rootBundle;
+    final staged = <NativeModelAssetStatus>[];
+    for (final asset in assets) {
+      if (!asset.available) {
+        staged.add(asset);
+        continue;
+      }
+      try {
+        final data = await assetBundle.load(asset.path);
+        final bytes = _byteDataToUint8List(data);
+        final result = await _modelStaging.invokeMethod<Map<dynamic, dynamic>>(
+          'stageModelAsset',
+          <String, Object?>{
+            'id': asset.id,
+            'path': asset.path,
+            'required': asset.required,
+            'bytes': bytes,
+          },
+        );
+        staged.add(NativeModelAssetStatus.fromMap(
+          Map<String, dynamic>.from(result ?? const <String, dynamic>{}),
+        ));
+      } on MissingPluginException catch (error) {
+        staged.add(asset.copyWith(error: error.message ?? error.toString()));
+      } on PlatformException catch (error) {
+        staged.add(asset.copyWith(error: error.message ?? error.code));
+      }
+    }
+    return staged;
+  }
+
+  static List<String> _modelAssetWarnings(List<NativeModelAssetStatus> assets) {
+    final warnings = <String>[];
+    for (final asset in assets.where((asset) => asset.required)) {
+      if (!asset.available) {
+        warnings.add('Required model asset missing: ${asset.path}');
+      } else if (!asset.nativeReady) {
+        warnings.add(
+            'Required model asset not staged for native ONNX: ${asset.path}');
+      }
+    }
+    return warnings;
   }
 
   Future<List<NativeCameraDevice>> listCameras() async {
@@ -118,6 +220,7 @@ class NativeRuntimeStatus {
     required this.environmentProvider,
     required this.plateQualityProvider,
     required this.warnings,
+    required this.modelAssets,
   });
 
   final String runtimeState;
@@ -127,8 +230,31 @@ class NativeRuntimeStatus {
   final String environmentProvider;
   final String plateQualityProvider;
   final List<String> warnings;
+  final List<NativeModelAssetStatus> modelAssets;
+
+  bool get requiredModelAssetsReady => modelAssets
+      .where((asset) => asset.required)
+      .every((asset) => asset.nativeReady);
+
+  int get requiredModelAssetCount =>
+      modelAssets.where((asset) => asset.required).length;
+
+  int get readyRequiredModelAssetCount =>
+      modelAssets.where((asset) => asset.required && asset.nativeReady).length;
+
+  List<NativeModelAssetStatus> get missingRequiredModelAssets => modelAssets
+      .where((asset) => asset.required && !asset.available)
+      .toList(growable: false);
+
+  List<NativeModelAssetStatus> get missingOptionalModelAssets => modelAssets
+      .where((asset) => !asset.required && !asset.available)
+      .toList(growable: false);
 
   factory NativeRuntimeStatus.fromMap(Map<String, dynamic> map) {
+    final platformWarnings =
+        ((map['warnings'] as List<dynamic>?) ?? const <dynamic>[])
+            .map(Stringify.value)
+            .toList();
     return NativeRuntimeStatus(
       runtimeState: (map['runtimeState'] as String?) ?? 'UNINITIALIZED',
       deviceTier: (map['deviceTier'] as String?) ?? 'AUTO',
@@ -136,9 +262,104 @@ class NativeRuntimeStatus {
       ocrProvider: (map['ocrProvider'] as String?) ?? 'NONE',
       environmentProvider: (map['environmentProvider'] as String?) ?? 'NONE',
       plateQualityProvider: (map['plateQualityProvider'] as String?) ?? 'NONE',
-      warnings: ((map['warnings'] as List<dynamic>?) ?? const <dynamic>[])
-          .map(Stringify.value)
-          .toList(),
+      warnings: platformWarnings,
+      modelAssets:
+          ((map['modelAssetStatus'] as List<dynamic>?) ?? const <dynamic>[])
+              .map((item) => NativeModelAssetStatus.fromMap(_asMap(item)))
+              .toList(),
+    );
+  }
+
+  NativeRuntimeStatus copyWith({
+    List<NativeModelAssetStatus>? modelAssets,
+    List<String> extraWarnings = const <String>[],
+  }) {
+    return NativeRuntimeStatus(
+      runtimeState: runtimeState,
+      deviceTier: deviceTier,
+      detectorProvider: detectorProvider,
+      ocrProvider: ocrProvider,
+      environmentProvider: environmentProvider,
+      plateQualityProvider: plateQualityProvider,
+      warnings: <String>{
+        ...warnings,
+        ...extraWarnings,
+      }.toList(growable: false),
+      modelAssets: modelAssets ?? this.modelAssets,
+    );
+  }
+}
+
+class NativeModelAssetStatus {
+  const NativeModelAssetStatus({
+    required this.id,
+    required this.path,
+    required this.required,
+    required this.available,
+    required this.sizeBytes,
+    this.nativePath,
+    this.error,
+  });
+
+  final String id;
+  final String path;
+  final bool required;
+  final bool available;
+  final int sizeBytes;
+  final String? nativePath;
+  final String? error;
+
+  bool get nativeReady => available && (nativePath?.isNotEmpty ?? false);
+
+  String get sizeLabel {
+    if (sizeBytes <= 0) return '0 B';
+    if (sizeBytes >= 1024 * 1024) {
+      return '${(sizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (sizeBytes >= 1024) {
+      return '${(sizeBytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '$sizeBytes B';
+  }
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'id': id,
+      'path': path,
+      'required': required,
+      'available': available,
+      'sizeBytes': sizeBytes,
+      'nativePath': nativePath,
+      'error': error,
+    };
+  }
+
+  NativeModelAssetStatus copyWith({
+    bool? available,
+    int? sizeBytes,
+    String? nativePath,
+    String? error,
+  }) {
+    return NativeModelAssetStatus(
+      id: id,
+      path: path,
+      required: required,
+      available: available ?? this.available,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      nativePath: nativePath ?? this.nativePath,
+      error: error ?? this.error,
+    );
+  }
+
+  factory NativeModelAssetStatus.fromMap(Map<String, dynamic> map) {
+    return NativeModelAssetStatus(
+      id: (map['id'] as String?) ?? '',
+      path: (map['path'] as String?) ?? '',
+      required: (map['required'] as bool?) ?? false,
+      available: (map['available'] as bool?) ?? false,
+      sizeBytes: _readInt(map['sizeBytes']),
+      nativePath: map['nativePath'] as String?,
+      error: map['error'] as String?,
     );
   }
 }
@@ -180,6 +401,8 @@ sealed class AnprEvent {
         return RuntimeAnprEvent.fromMap(map);
       case 'trackUpdate':
         return TrackUpdateAnprEvent.fromMap(map);
+      case 'ocr':
+        return OcrAnprEvent.fromMap(map);
       case 'matchAlert':
         return MatchAlertAnprEvent.fromMap(map);
       case 'error':
@@ -261,6 +484,112 @@ class TrackUpdateAnprEvent extends AnprEvent {
       tracks: ((map['tracks'] as List<dynamic>?) ?? const <dynamic>[])
           .map((item) => AnprTrack.fromMap(_asMap(item)))
           .toList(),
+    );
+  }
+}
+
+class OcrAnprEvent extends AnprEvent {
+  const OcrAnprEvent({
+    required super.timestamp,
+    required this.trackId,
+    required this.rawText,
+    required this.normalizedPlate,
+    required this.displayPlate,
+    required this.confidence,
+    required this.layout,
+    required this.category,
+    required this.patternScore,
+    required this.provider,
+    required this.vehicleImagePath,
+    required this.plateImagePath,
+    required this.plateEnhancedImagePath,
+    required this.plateBinaryImagePath,
+    required this.plateTopLineImagePath,
+    required this.plateBottomLineImagePath,
+    required this.plateInnerTextImagePath,
+    required this.plateCropWidth,
+    required this.plateCropHeight,
+    required this.preprocessingVariant,
+    required this.preprocessingVariants,
+    required this.characterConfidences,
+  }) : super(type: 'ocr');
+
+  final String trackId;
+  final String rawText;
+  final String normalizedPlate;
+  final String displayPlate;
+  final double confidence;
+  final String layout;
+  final String category;
+  final double patternScore;
+  final String provider;
+  final String vehicleImagePath;
+  final String plateImagePath;
+  final String plateEnhancedImagePath;
+  final String plateBinaryImagePath;
+  final String plateTopLineImagePath;
+  final String plateBottomLineImagePath;
+  final String plateInnerTextImagePath;
+  final int plateCropWidth;
+  final int plateCropHeight;
+  final String preprocessingVariant;
+  final List<String> preprocessingVariants;
+  final List<NativeCharacterConfidence> characterConfidences;
+
+  factory OcrAnprEvent.fromMap(Map<String, dynamic> map) {
+    return OcrAnprEvent(
+      timestamp: _readTimestamp(map),
+      trackId: (map['trackId'] as String?) ?? '',
+      rawText: (map['rawText'] as String?) ?? '',
+      normalizedPlate: (map['normalizedPlate'] as String?) ?? '',
+      displayPlate: (map['displayPlate'] as String?) ?? '',
+      confidence: _readDouble(map['confidence']),
+      layout: (map['layout'] as String?) ?? 'SINGLE_LINE',
+      category: (map['category'] as String?) ?? 'UNKNOWN_VALID_CANDIDATE',
+      patternScore: _readDouble(map['patternScore']),
+      provider: (map['provider'] as String?) ?? '',
+      vehicleImagePath: (map['vehicleImagePath'] as String?) ?? '',
+      plateImagePath: (map['plateImagePath'] as String?) ?? '',
+      plateEnhancedImagePath: (map['plateEnhancedImagePath'] as String?) ?? '',
+      plateBinaryImagePath: (map['plateBinaryImagePath'] as String?) ?? '',
+      plateTopLineImagePath: (map['plateTopLineImagePath'] as String?) ?? '',
+      plateBottomLineImagePath:
+          (map['plateBottomLineImagePath'] as String?) ?? '',
+      plateInnerTextImagePath:
+          (map['plateInnerTextImagePath'] as String?) ?? '',
+      plateCropWidth: _readInt(map['plateCropWidth']),
+      plateCropHeight: _readInt(map['plateCropHeight']),
+      preprocessingVariant:
+          (map['preprocessingVariant'] as String?) ?? 'RAW_CROP',
+      preprocessingVariants:
+          ((map['preprocessingVariants'] as List<dynamic>?) ??
+                  const <dynamic>[])
+              .map(Stringify.value)
+              .toList(),
+      characterConfidences:
+          ((map['characterConfidences'] as List<dynamic>?) ?? const <dynamic>[])
+              .map((item) => NativeCharacterConfidence.fromMap(_asMap(item)))
+              .toList(),
+    );
+  }
+}
+
+class NativeCharacterConfidence {
+  const NativeCharacterConfidence({
+    required this.char,
+    required this.confidence,
+    required this.position,
+  });
+
+  final String char;
+  final double confidence;
+  final int position;
+
+  factory NativeCharacterConfidence.fromMap(Map<String, dynamic> map) {
+    return NativeCharacterConfidence(
+      char: (map['char'] as String?) ?? '',
+      confidence: _readDouble(map['confidence']),
+      position: _readInt(map['position']),
     );
   }
 }
@@ -438,6 +767,10 @@ double _readDouble(dynamic value) {
 int _readInt(dynamic value) {
   if (value is num) return value.round();
   return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+Uint8List _byteDataToUint8List(ByteData data) {
+  return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
 }
 
 class Stringify {

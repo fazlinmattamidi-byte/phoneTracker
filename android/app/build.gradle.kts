@@ -29,6 +29,10 @@ android {
         release {
             // Production signing belongs to the release-build phase after Play Console credentials are available.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
@@ -45,8 +49,10 @@ flutter {
 
 dependencies {
     val cameraxVersion = "1.6.1"
+    val onnxRuntimeVersion = "1.27.0"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:$onnxRuntimeVersion")
 }
