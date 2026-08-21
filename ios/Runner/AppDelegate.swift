@@ -2607,6 +2607,9 @@ final class PlateqCameraPreviewFactory: NSObject, FlutterPlatformViewFactory {
 }
 
 final class PlateqCameraPreviewView: NSObject, FlutterPlatformView, AVCaptureVideoDataOutputSampleBufferDelegate {
+  private static let sessionQueueKey = DispatchSpecificKey<UInt8>()
+  private static let sessionQueueValue: UInt8 = 1
+
   private let root: PreviewContainerView
   private let bridge: PlateqNativeBridge
   private let session = AVCaptureSession()
@@ -2617,6 +2620,7 @@ final class PlateqCameraPreviewView: NSObject, FlutterPlatformView, AVCaptureVid
     self.bridge = bridge
     root = PreviewContainerView(frame: frame)
     super.init()
+    sessionQueue.setSpecific(key: Self.sessionQueueKey, value: Self.sessionQueueValue)
     root.backgroundColor = UIColor(red: 0.008, green: 0.024, blue: 0.090, alpha: 1)
 
     let previewLayer = AVCaptureVideoPreviewLayer(session: session)
@@ -2644,7 +2648,7 @@ final class PlateqCameraPreviewView: NSObject, FlutterPlatformView, AVCaptureVid
 
   deinit {
     NotificationCenter.default.removeObserver(self)
-    stopSession()
+    teardownSession()
   }
 
   private func configureSession() {
@@ -2688,18 +2692,42 @@ final class PlateqCameraPreviewView: NSObject, FlutterPlatformView, AVCaptureVid
   }
 
   @objc private func startSession() {
+    let session = session
     sessionQueue.async {
-      if !self.session.isRunning {
-        self.session.startRunning()
+      if !session.isRunning {
+        session.startRunning()
       }
     }
   }
 
   @objc private func stopSession() {
+    let session = session
     sessionQueue.async {
-      if self.session.isRunning {
-        self.session.stopRunning()
+      if session.isRunning {
+        session.stopRunning()
       }
+    }
+  }
+
+  private func teardownSession() {
+    let session = session
+    let cleanup = {
+      session.outputs
+        .compactMap { $0 as? AVCaptureVideoDataOutput }
+        .forEach { $0.setSampleBufferDelegate(nil, queue: nil) }
+      if session.isRunning {
+        session.stopRunning()
+      }
+      session.beginConfiguration()
+      session.inputs.forEach { session.removeInput($0) }
+      session.outputs.forEach { session.removeOutput($0) }
+      session.commitConfiguration()
+    }
+
+    if DispatchQueue.getSpecific(key: Self.sessionQueueKey) == Self.sessionQueueValue {
+      cleanup()
+    } else {
+      sessionQueue.sync(execute: cleanup)
     }
   }
 
